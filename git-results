@@ -1,0 +1,263 @@
+#! /usr/bin/python2
+
+from __future__ import print_function
+
+import argparse
+import datetime
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import textwrap
+
+class FolderState(object):
+    """An object that tracks which files exist at init and at another time,
+    and can copy changes to another folder."""
+
+    def __init__(self, dir):
+        self._dir = dir
+        self._files = set()
+        self._scan(dir)
+
+
+    def copyResultsTo(self, dir):
+        """Copy changes from self._dir to dir.  Use most common path."""
+        allChanges = set()
+        self._scanChanges(self._dir, allChanges)
+
+        prefix = None
+        for c in allChanges:
+            if prefix is None:
+                prefix = c
+            else:
+                while not c.startswith(prefix):
+                    prefix = prefix[:-1]
+
+        for c in allChanges:
+            shutil.copy2(c, os.path.join(dir, c[len(prefix):]))
+
+
+    def _scan(self, path):
+        for f in os.listdir(path):
+            ff = os.path.join(path, f)
+            if os.path.isfile(ff):
+                self._files.add(ff)
+            if os.path.isdir(ff) and not os.path.islink(ff):
+                self._scan(ff)
+
+
+    def _scanChanges(self, path, changeset):
+        for f in os.listdir(path):
+            ff = os.path.join(path, f)
+            if os.path.isfile(ff) and ff not in self._files:
+                changeset.add(ff)
+            elif os.path.isdir(ff) and not os.path.islink(ff):
+                self._scanChanges(ff, changeset)
+
+
+
+def checked(cmd, nonZeroOk = False, shell = False):
+    cmd = shlex.split(cmd)
+    p = subprocess.Popen(cmd, stdout = subprocess.PIPE,
+            stderr = subprocess.PIPE, shell = shell)
+    p.communicate()
+    r = p.poll()
+
+    if r != 0 and not nonZeroOk:
+        raise Exception("Command '{}' failed with {}".format(cmd, r))
+
+
+def checkedOutput(cmd):
+    """Raises an Exception if cmd fails; returns stdout otherwise."""
+    cmd = shlex.split(cmd)
+    p = subprocess.Popen(cmd, stdout = subprocess.PIPE,
+            stderr = subprocess.PIPE)
+    stdout, stderr = p.communicate()
+    return stdout
+
+
+def ensureGitignore(resultsDir):
+    if checkedOutput("git status {} --porcelain".format(resultsDir)).strip():
+        with open('.gitignore', 'a') as f:
+            f.write("\n{}".format(resultsDir))
+
+
+def runExperiment(resultsDir, commitTag):
+    odir = os.getcwd()
+    dir = tempfile.mkdtemp()
+    try:
+        os.chdir(dir)
+        checked('git init')
+        checked('git remote add origin file://{}'.format(odir))
+        checked('git fetch origin {}'.format(commitTag))
+        checked('git reset --hard FETCH_HEAD')
+
+        checked(os.path.abspath('./git-results-build'), shell = True)
+
+        # Now that we've built it, snapshot the folder so we can copy whatever
+        # changed as results.  We'll be a little smart and take off the greatest
+        # common path too...
+        fs = FolderState(dir)
+
+        print("Now running {} from {}...".format(commitTag, dir))
+
+        # Special handling for our runner script
+        output = open('{}/stdout'.format(resultsDir), 'w')
+        error = open('{}/stderr'.format(resultsDir), 'w')
+        p = subprocess.Popen(os.path.abspath('./git-results-run'), shell = True,
+                stdout = output, stderr = error)
+        p.communicate()
+        r = p.poll()
+        if r != 0:
+            error.write(("\n\ngit-results detected abnormal program "
+                    "termination: {}").format(r))
+            raise Exception("Non-zero exit status: {}".format(r))
+
+        # If we reach here, everything ran OK, so copy files
+        print("Copying results...")
+        fs.copyResultsTo(resultsDir)
+        print("OK")
+    finally:
+        shutil.rmtree(dir)
+        os.chdir(odir)
+
+
+def safeMake(path):
+    try:
+        os.makedirs(path)
+    except OSError, e:
+        # exists
+        if e.errno != 17:
+            raise
+
+
+def setupExperiment(resultsDir, shouldCommit, tag, message):
+    """Sets up the experiment skeleton and commits the git repo to an acceptable
+    state.
+
+    Returns the directory for results (absolute path) and the commit SHA to
+    test.
+    """
+    resultsBaseRelative = resultsDir
+    resultsDir = os.path.abspath(resultsDir)
+    if not os.path.exists(os.path.join(resultsDir, ".git")):
+        curdir = os.getcwd()
+        safeMake(resultsDir)
+        os.chdir(resultsDir)
+        checked("git init")
+        # If we don't make a file, it looks like results is always ignored even
+        # though it isn't.
+        with open("{}/PLACEHOLDER".format(resultsDir), 'w') as f:
+            f.write("Placehodler for git status check")
+        os.chdir(curdir)
+
+    # Now that it's made, make sure it's ignored
+    ensureGitignore(resultsBaseRelative)
+
+    # Make the actual results folder
+    # Allow / encourage running same tag several times.  We'll use /1, /2, etc
+    n = 1
+    while True:
+        tagDir = os.path.join(resultsDir, tag + "/{}".format(n))
+        if not os.path.exists(tagDir):
+            break
+        n += 1
+    tag = tag + "/{}".format(n)
+    safeMake(tagDir)
+
+    # Dated linkage
+    now = datetime.datetime.now()
+    dated = os.path.join(resultsDir, 'dated', now.strftime("%Y"),
+            now.strftime("%m"))
+    safeMake(dated)
+
+    linkAs = "{}-{}".format(now.strftime("%d"), tag)
+    safeMake(os.path.dirname(os.path.join(dated, linkAs)))
+    checked("ln -s '../../../{}' '{}'".format(tag, os.path.join(dated, linkAs)))
+
+    cleanMessage = message.replace("'", "\\'").replace("&", "\\&"
+            ).replace("|", "\\|").replace("!", "\\!")
+
+    # Check the state of our git repo
+    if checkedOutput("git status --porcelain").strip():
+        # Need to commit, if we can
+        if not shouldCommit:
+            raise ValueError("Repository has unsaved changes; use -c to commit "
+                    "automatically.")
+
+        checked("git branch -D git-results", True)
+        checked("git branch --no-track git-results", True)
+        checked("git checkout git-results")
+        checked("git add .")
+        checked("git commit -m '{}'".format(cleanMessage))
+
+    # Add our tag
+    gitTag = "results/{}".format(tag)
+    checked("git tag -a -m '{}' {}".format(cleanMessage, gitTag))
+
+    # Commit our message file
+    with open(os.path.join(tagDir, "git-results-message"), "w") as f:
+        f.write(message)
+        f.write("\n\ngit-results-run\n---------------\n")
+        f.write(open('git-results-run').read())
+
+    return tagDir, gitTag
+
+
+def checkTag(s):
+    """Takes a string s and returns it, if it is a tag."""
+    if re.search("^[a-zA-Z0-9_/-]+$", s) is None:
+        raise ValueError("Tag must match regex [a-zA-Z0-9_-/]+")
+    if s == 'dated':
+        raise ValueError("Tag may not be 'dated'")
+    return s
+
+
+if __name__ == '__main__':
+    if not os.path.isdir('.git'):
+        print("Must be used in a git directory!")
+        sys.exit(1)
+
+    ap = argparse.ArgumentParser(description = "A git extension for cataloging "
+            "computation results")
+    ap.add_argument("-d", "--dir", default = "results", help = "Directory used "
+            "to store results.  Automatically created and set up as a git "
+            "repo.  Also automatically added to .gitignore")
+    ap.add_argument("-c", "--commit", action = 'store_true',
+            help = "If there are uncommitted changes, automatically commit "
+                "with the message as given.")
+    ap.add_argument("-m", "--message", help = "Commit message / "
+            "git-results-message content paired with results.  If unspecified, "
+            "we'll pop open an editor for you (like git commit)")
+    ap.add_argument("tag", help = textwrap.dedent("""
+            Path to organize these results under.  For instance, giving a tag of parity/squids
+            will create a git tag for the commit as results/parity/squids, and will create the
+            folders "parity" and subfolder "squids" to store the results in.  It is an error
+            to specify a tag that already exists.  "dated" is also an invalid option, as that is
+            a unique folder created by git-results to help with indexing results by date."""))
+    args = ap.parse_args()
+    checkTag(args.tag)
+    if not args.message:
+        raise NotImplementedError("You need to use the -m flag to pass your message")
+
+    if not os.path.isfile('git-results-build'):
+        print(textwrap.dedent("""
+                To use git-results, two files are required: git-results-run and
+                git-results-build.  Even if git-results-build is empty, it must exist.
+                git-results-build should be a script that builds resources used by
+                git-results-run."""))
+
+    if not os.path.isfile('git-results-run'):
+        print(textwrap.dedent("""
+                To use git-results, you must have a git-results-run file in your
+                repository's root.  This file must contain a single shell-executable
+                line of text that runs your experiment."""))
+        sys.exit(1)
+
+    # OK, run the experiment
+    resultsDir, commit = setupExperiment(args.dir, args.commit, args.tag,
+            args.message)
+    runExperiment(resultsDir, commit)
