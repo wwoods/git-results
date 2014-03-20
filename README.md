@@ -54,6 +54,14 @@ Simplest scenario:
 So, what happened there?  git-results created a tag, built your project, ran it,
 and tidied all of the output files into a folder for you.  Neat, huh?
 
+Note that it might be easier in e.g. a console to use the -p flag:
+
+    $ git results -cp results/test/run -m "Let's see..."
+
+The -p flag means that the first part of the path is the directory to store
+results in.  Without -p this defaults to "results", which can be useful, but
+paths do not tab-complete in a console.
+
 For a little more detail, git-results tagged the head commit of your repository
 with results/test/run/1 (note test/run comes from our argument; results is the
 output folder, and 1 is the instance of this tag being run).  It then checked
