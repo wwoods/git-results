@@ -5,13 +5,14 @@ from __future__ import print_function
 import argparse
 import datetime
 import os
+import random
 import re
 import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
 import textwrap
+import traceback
 
 class FolderState(object):
     """An object that tracks which files exist at init and at another time,
@@ -34,10 +35,12 @@ class FolderState(object):
                 prefix = c
             else:
                 while not c.startswith(prefix):
-                    prefix = prefix[:-1]
+                    prefix = os.path.dirname(prefix)
 
         for c in allChanges:
-            shutil.copy2(c, os.path.join(dir, c[len(prefix):]))
+            # Add 1 to len(prefix) so that we don't include the preceding slash,
+            # which would make os.path.join treat it as an absolute
+            shutil.copy2(c, os.path.join(dir, c[len(prefix) + 1:]))
 
 
     def _scan(self, path):
@@ -79,30 +82,56 @@ def checkedOutput(cmd):
     return stdout
 
 
+def copySymlinks(frm, to):
+    """Copies all symlinks recursively from directory frm to directory to."""
+    for f in os.listdir(frm):
+        ffrm = os.path.join(frm, f)
+        fto = os.path.join(to, f)
+        if os.path.islink(ffrm):
+            linkTo = os.readlink(ffrm)
+            os.symlink(linkTo, fto)
+        elif os.path.isdir(ffrm) and os.path.isdir(fto):
+            copySymlinks(ffrm, fto)
+
+
 def ensureGitignore(resultsDir):
     if checkedOutput("git status {} --porcelain".format(resultsDir)).strip():
         with open('.gitignore', 'a') as f:
             f.write("\n{}".format(resultsDir))
 
 
-def runExperiment(resultsDir, commitTag):
+def runExperiment(dir, resultsDir, commitTag):
+    """Given a directory to initialize and run our experiment in 'dir', run it
+    and put results in 'resultsDir'"""
+
+    dirRelative = dir
+    dir = os.path.abspath(dir)
+    resultsDirRelative = resultsDir
+    resultsDir = os.path.abspath(resultsDir)
     odir = os.getcwd()
-    dir = tempfile.mkdtemp()
     try:
         os.chdir(dir)
         checked('git init')
         checked('git remote add origin file://{}'.format(odir))
         checked('git fetch origin {}'.format(commitTag))
         checked('git reset --hard FETCH_HEAD')
+        copySymlinks(odir, dir)
 
-        checked(os.path.abspath('./git-results-build'), shell = True)
+        print("Building {} in {}...".format(commitTag, dirRelative))
+        p = subprocess.Popen(os.path.abspath('./git-results-build'),
+                shell = True)
+        p.communicate()
+        r = p.poll()
+        if r != 0:
+            print("== BUILD FAILED ==")
+            sys.exit(1)
 
         # Now that we've built it, snapshot the folder so we can copy whatever
         # changed as results.  We'll be a little smart and take off the greatest
         # common path too...
         fs = FolderState(dir)
 
-        print("Now running {} from {}...".format(commitTag, dir))
+        print("Running {} in {}...".format(commitTag, dirRelative))
 
         # Special handling for our runner script
         output = open('{}/stdout'.format(resultsDir), 'w')
@@ -111,17 +140,16 @@ def runExperiment(resultsDir, commitTag):
                 stdout = output, stderr = error)
         p.communicate()
         r = p.poll()
+
+        # If we reach here, everything ran OK, so copy files
+        print("Copying results to {}...".format(resultsDirRelative))
+        fs.copyResultsTo(resultsDir)
+
         if r != 0:
             error.write(("\n\ngit-results detected abnormal program "
                     "termination: {}").format(r))
-            raise Exception("Non-zero exit status: {}".format(r))
-
-        # If we reach here, everything ran OK, so copy files
-        print("Copying results...")
-        fs.copyResultsTo(resultsDir)
-        print("OK")
+        return r
     finally:
-        shutil.rmtree(dir)
         os.chdir(odir)
 
 
@@ -138,8 +166,8 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     """Sets up the experiment skeleton and commits the git repo to an acceptable
     state.
 
-    Returns the directory for results (absolute path) and the commit SHA to
-    test.
+    Returns the directory for results (absolute path), dated symlink path (for
+    rollback), and the commit tag to run.
     """
     resultsBaseRelative = resultsDir
     resultsDir = os.path.abspath(resultsDir)
@@ -149,19 +177,37 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
         os.chdir(resultsDir)
         checked("git init")
         # If we don't make a file, it looks like results is always ignored even
-        # though it isn't.
-        with open("{}/PLACEHOLDER".format(resultsDir), 'w') as f:
-            f.write("Placehodler for git status check")
+        # though it isn't.  Luckily, we need a .gitignore anyway
+        with open("{}/.gitignore".format(resultsDir), 'w') as f:
+            f.write("tmp")
         os.chdir(curdir)
 
     # Now that it's made, make sure it's ignored
     ensureGitignore(resultsBaseRelative)
 
+    cleanMessage = message.replace('"', '\\"').replace("&", "\\&"
+            ).replace("|", "\\|").replace("!", "\\!")
+
+    # Check the state of our git repo
+    if checkedOutput("git status --porcelain").strip():
+        # Need to commit, if we can
+        if not shouldCommit:
+            raise ValueError("Repository has unsaved changes; use -c to commit "
+                    "automatically.")
+
+        # If this fails, the branch didn't exist or we're already on it, both
+        # of which are fine
+        checked("git branch -D git-results", True)
+        checked("git branch --no-track git-results", True)
+        checked("git checkout git-results")
+        checked("git add .")
+        checked('git commit -m "{}"'.format(cleanMessage))
+
     # Make the actual results folder
     # Allow / encourage running same tag several times.  We'll use /1, /2, etc
     n = 1
     while True:
-        tagDir = os.path.join(resultsDir, tag + "/{}".format(n))
+        tagDir = os.path.join(resultsBaseRelative, tag + "/{}".format(n))
         if not os.path.exists(tagDir):
             break
         n += 1
@@ -174,37 +220,21 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
             now.strftime("%m"))
     safeMake(dated)
 
-    linkAs = "{}-{}".format(now.strftime("%d"), tag)
-    safeMake(os.path.dirname(os.path.join(dated, linkAs)))
-    checked("ln -s '../../../{}' '{}'".format(tag, os.path.join(dated, linkAs)))
-
-    cleanMessage = message.replace("'", "\\'").replace("&", "\\&"
-            ).replace("|", "\\|").replace("!", "\\!")
-
-    # Check the state of our git repo
-    if checkedOutput("git status --porcelain").strip():
-        # Need to commit, if we can
-        if not shouldCommit:
-            raise ValueError("Repository has unsaved changes; use -c to commit "
-                    "automatically.")
-
-        checked("git branch -D git-results", True)
-        checked("git branch --no-track git-results", True)
-        checked("git checkout git-results")
-        checked("git add .")
-        checked("git commit -m '{}'".format(cleanMessage))
+    linkAs = os.path.join(dated, "{}-{}".format(now.strftime("%d"), tag))
+    safeMake(os.path.dirname(linkAs))
+    checked("ln -s '../../../{}' '{}'".format(tag, linkAs))
 
     # Add our tag
-    gitTag = "results/{}".format(tag)
-    checked("git tag -a -m '{}' {}".format(cleanMessage, gitTag))
+    gitTag = "{}/{}".format(resultsBaseRelative, tag)
+    checked('git tag -a -m "{}" {}'.format(cleanMessage, gitTag))
 
-    # Commit our message file
+    # Write our message file
     with open(os.path.join(tagDir, "git-results-message"), "w") as f:
         f.write(message)
         f.write("\n\ngit-results-run\n---------------\n")
         f.write(open('git-results-run').read())
 
-    return tagDir, gitTag
+    return tagDir, linkAs, gitTag
 
 
 def checkTag(s):
@@ -214,6 +244,18 @@ def checkTag(s):
     if s == 'dated':
         raise ValueError("Tag may not be 'dated'")
     return s
+
+
+def safeRollback(d):
+    """Delete d and all parent directories (up to most common directory with
+    current directory)
+    """
+    try:
+        os.removedirs(d)
+    except OSError, e:
+        # Directory not empty
+        if e.errno != 39:
+            raise
 
 
 if __name__ == '__main__':
@@ -258,6 +300,42 @@ if __name__ == '__main__':
         sys.exit(1)
 
     # OK, run the experiment
-    resultsDir, commit = setupExperiment(args.dir, args.commit, args.tag,
-            args.message)
-    runExperiment(resultsDir, commit)
+    resultsDir, datedLink, commitTag = setupExperiment(args.dir, args.commit,
+            args.tag, args.message)
+    try:
+        # NOTE - For e.g. MPI, or other network tasks, we do not use the
+        # standard tempfile methods.  The path has to be accessible on all
+        # machines.
+        expDir = None
+        safeMake(os.path.join(args.dir, "tmp"))
+        while True:
+            randName = "".join([
+                    random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+                    for _ in range(8) ])
+            expDir = os.path.join(args.dir, "tmp", randName)
+            try:
+                os.mkdir(expDir)
+                break
+            except OSError, e:
+                # Already exists
+                if e.errno != 17:
+                    raise
+        try:
+            r = runExperiment(expDir, resultsDir, commitTag)
+            if r != 0:
+                print("Non-zero exit status: {}".format(r))
+                sys.exit(1)
+            else:
+                print("OK")
+        finally:
+            #shutil.rmtree(expDir)
+            print("Left " + expDir)
+    except:
+        # Roll back our tag and results folders...
+        traceback.print_exc()
+        print("Deleting {} and associated tags / links".format(resultsDir))
+        checked("git tag -d {}".format(commitTag))
+        os.unlink(datedLink)
+        safeRollback(os.path.dirname(datedLink))
+        shutil.rmtree(resultsDir)
+        safeRollback(os.path.dirname(resultsDir))
