@@ -226,7 +226,7 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
         # If we don't make a file, it looks like results is always ignored even
         # though it isn't.  Luckily, we need a .gitignore anyway
         with open("{}/.gitignore".format(resultsDir), 'w') as f:
-            f.write("tmp")
+            f.write(".tmp")
         os.chdir(curdir)
 
     # Now that it's made, make sure it's ignored
@@ -366,12 +366,12 @@ if __name__ == '__main__':
         # standard tempfile methods.  The path has to be accessible on all
         # machines.
         expDir = None
-        safeMake(os.path.join(args.dir, "tmp"))
+        safeMake(os.path.join(args.dir, ".tmp"))
         while True:
             randName = "".join([
                     random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
                     for _ in range(8) ])
-            expDir = os.path.join(args.dir, "tmp", randName)
+            expDir = os.path.join(args.dir, ".tmp", randName)
             try:
                 os.mkdir(expDir)
                 break
@@ -404,6 +404,7 @@ if __name__ == '__main__':
     if runFailed:
         # We failed, but not due to a build failure.
         # Move our numbered file to one like "3-fail"
+        print("Moving {} to {}".format(resultsDir, resultsDir + FAIL_SUFFIX))
         os.rename(resultsDir, resultsDir + FAIL_SUFFIX)
         oldLink = os.readlink(datedLink)
         os.unlink(datedLink)
