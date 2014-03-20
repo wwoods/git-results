@@ -94,3 +94,16 @@ Footnote on copying before building - if one of the files
 in your repo were your test parameters, which is what this system is more or
 less designed for at the moment, changing it could alter your running test if
 builds were in-place).
+
+
+TODO
+----
+
+* Need a clean command to delete an exact tag an any children of it, also
+  cleaning up the git repository, so that a tag can be reused.
+
+* Probably want to commit on the results repo as well... maybe.
+
+* git-results-build and git-results-run should be added to .gitignore if
+  they're not already
+"""

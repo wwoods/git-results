@@ -2,17 +2,6 @@
 
 from __future__ import print_function
 
-"""TODO -
-
-Need a clean command to delete an exact tag an any children of it, also cleaning
-up the git repository, so that a branch can be renamed.
-
-Probably want to commit on the results repo as well...
-
-Also, git-results-build and git-results-run should probably be in .gitignore and
-copied to message file.
-"""
-
 import argparse
 import datetime
 import os
