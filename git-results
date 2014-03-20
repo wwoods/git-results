@@ -8,6 +8,9 @@ Need a clean command to delete an exact tag an any children of it, also cleaning
 up the git repository, so that a branch can be renamed.
 
 Probably want to commit on the results repo as well...
+
+Also, git-results-build and git-results-run should probably be in .gitignore and
+copied to message file.
 """
 
 import argparse
@@ -20,7 +23,11 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import threading
+import time
 import traceback
+
+FAIL_SUFFIX = '-fail'
 
 class FolderState(object):
     """An object that tracks which files exist at init and at another time,
@@ -108,6 +115,21 @@ def ensureGitignore(resultsDir):
             f.write("\n{}".format(resultsDir))
 
 
+def tee(infile, *files):
+    """Thanks to http://stackoverflow.com/a/4985080/160205, tee lines from the
+    given file to one or more other files.
+    """
+    def fanout():
+        for line in iter(infile.readline, ''):
+            for f in files:
+                f.write(line)
+        infile.close()
+    t = threading.Thread(target = fanout)
+    t.daemon = True
+    t.start()
+    return t
+
+
 def runExperiment(dir, resultsDir, commitTag):
     """Given a directory to initialize and run our experiment in 'dir', run it
     and put results in 'resultsDir'"""
@@ -125,6 +147,8 @@ def runExperiment(dir, resultsDir, commitTag):
         checked('git reset --hard FETCH_HEAD')
         copySymlinks(odir, dir)
 
+        preBuild = time.time()
+
         print("Building {} in {}...".format(commitTag, dirRelative))
         p = subprocess.Popen(os.path.abspath('./git-results-build'),
                 shell = True)
@@ -140,22 +164,37 @@ def runExperiment(dir, resultsDir, commitTag):
         fs = FolderState(dir)
 
         print("Running {} in {}...".format(commitTag, dirRelative))
+        print("=" * 80)
+        print("=" * 80)
+        preRun = time.time()
 
         # Special handling for our runner script
         output = open('{}/stdout'.format(resultsDir), 'w')
         error = open('{}/stderr'.format(resultsDir), 'w')
         p = subprocess.Popen(os.path.abspath('./git-results-run'), shell = True,
-                stdout = output, stderr = error)
-        p.communicate()
-        r = p.poll()
+                stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+        threads = [ tee(p.stdout, output, sys.stdout),
+                tee(p.stderr, error, sys.stderr) ]
+        [ t.join() for t in threads ]
+        r = p.wait()
+
+        print("=" * 80)
+        print("=" * 80)
 
         # If we reach here, everything ran OK, so copy files
         print("Copying results to {}...".format(resultsDirRelative))
         fs.copyResultsTo(resultsDir)
 
+        allDone = time.time()
+        with open(os.path.join(resultsDir, 'git-results-message'), 'a') as f:
+            f.write("\n\n")
+            f.write("{} after {}s\n".format("OK" if r == 0 else "FAIL",
+                    allDone - preRun))
+            f.write("Build took {}s\n".format(preRun - preBuild))
+
         if r != 0:
             error.write(("\n\ngit-results detected abnormal program "
-                    "termination: {}").format(r))
+                    "termination: {}\n").format(r))
         return r
     finally:
         os.chdir(odir)
@@ -218,7 +257,8 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     n = 1
     while True:
         tagDir = os.path.join(resultsBaseRelative, tag + "/{}".format(n))
-        if not os.path.exists(tagDir):
+        if (not os.path.exists(tagDir)
+                and not os.path.exists(tagDir + FAIL_SUFFIX)):
             break
         n += 1
     tag = tag + "/{}".format(n)
@@ -245,6 +285,8 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
         f.write("\n\nCommit: {}".format(curCommit))
         f.write("\n\ngit-results-run\n---------------\n")
         f.write(open('git-results-run').read())
+        f.write("\n\ngit-results-build\n-----------------\n")
+        f.write(open('git-results-build').read())
 
     return tagDir, linkAs, gitTag
 
@@ -317,6 +359,8 @@ if __name__ == '__main__':
     # OK, run the experiment
     resultsDir, datedLink, commitTag = setupExperiment(args.dir, args.commit,
             args.tag, args.message)
+
+    runFailed = False
     try:
         # NOTE - For e.g. MPI, or other network tasks, we do not use the
         # standard tempfile methods.  The path has to be accessible on all
@@ -339,7 +383,7 @@ if __name__ == '__main__':
             r = runExperiment(expDir, resultsDir, commitTag)
             if r != 0:
                 print("Non-zero exit status: {}".format(r))
-                sys.exit(1)
+                runFailed = True
             else:
                 print("OK")
         finally:
@@ -354,3 +398,14 @@ if __name__ == '__main__':
         safeRollback(os.path.dirname(datedLink))
         shutil.rmtree(resultsDir)
         safeRollback(os.path.dirname(resultsDir))
+        # Build failed for sure!
+        sys.exit(1)
+
+    if runFailed:
+        # We failed, but not due to a build failure.
+        # Move our numbered file to one like "3-fail"
+        os.rename(resultsDir, resultsDir + FAIL_SUFFIX)
+        oldLink = os.readlink(datedLink)
+        os.unlink(datedLink)
+        os.symlink(oldLink + FAIL_SUFFIX, datedLink + FAIL_SUFFIX)
+        sys.exit(1)
