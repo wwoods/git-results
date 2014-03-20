@@ -9,7 +9,7 @@ Usage
 Simply put git-results somewhere on your PATH.  Then from a git repository, 
 type:
 
-git results
+    git results
 
 It will give you help.  Essentially, you need two more files in the base of your
 repository: git-results-build and git-results-run.  These will not be committed,
