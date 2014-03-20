@@ -135,6 +135,8 @@ def runExperiment(dir, resultsDir, commitTag):
         checked('git fetch origin {}'.format(commitTag))
         checked('git reset --hard FETCH_HEAD')
         copySymlinks(odir, dir)
+        for grFile in [ "git-results-build", "git-results-run" ]:
+            shutil.copy2(os.path.join(odir, grFile), os.path.join(dir, grFile))
 
         preBuild = time.time()
 
@@ -230,6 +232,18 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
         if not shouldCommit:
             raise ValueError("Repository has unsaved changes; use -c to commit "
                     "automatically.")
+
+        # Make sure git-results-build and git-results-run are ignored
+        gb = checkedOutput("git status git-results-build --porcelain").strip()
+        if gb and gb.startswith("?"):
+            # Would be added.  Don't do that!
+            with open(".gitignore", "a") as f:
+                f.write("\ngit-results-build")
+        gb = checkedOutput("git status git-results-run --porcelain").strip()
+        if gb and gb.startswith("?"):
+            # Same
+            with open(".gitignore", "a") as f:
+                f.write("\ngit-results-run")
 
         # If this fails, the branch didn't exist or we're already on it, both
         # of which are fine

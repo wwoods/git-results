@@ -103,7 +103,4 @@ TODO
   cleaning up the git repository, so that a tag can be reused.
 
 * Probably want to commit on the results repo as well... maybe.
-
-* git-results-build and git-results-run should be added to .gitignore if
-  they're not already
 """
