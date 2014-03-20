@@ -18,6 +18,7 @@ import threading
 import time
 import traceback
 
+ABORT_SUFFIX = '-abrt'
 FAIL_SUFFIX = '-fail'
 
 class FolderState(object):
@@ -166,15 +167,25 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         print("=" * 80)
         preRun = time.time()
 
-        # Special handling for our runner script
-        output = open('{}/stdout'.format(resultsDir), 'w')
-        error = open('{}/stderr'.format(resultsDir), 'w')
-        p = subprocess.Popen(os.path.abspath('./git-results-run'), shell = True,
-                stdout = subprocess.PIPE, stderr = subprocess.PIPE)
-        threads = [ tee(p.stdout, output, sys.stdout),
-                tee(p.stderr, error, sys.stderr) ]
-        [ t.join() for t in threads ]
-        r = p.wait()
+        threads = None
+        didAbort = False
+        try:
+            # Special handling for our runner script
+            output = open('{}/stdout'.format(resultsDir), 'w')
+            error = open('{}/stderr'.format(resultsDir), 'w')
+            p = subprocess.Popen(os.path.abspath('./git-results-run'), shell = True,
+                    stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+            threads = [ tee(p.stdout, output, sys.stdout),
+                    tee(p.stderr, error, sys.stderr) ]
+            [ t.join() for t in threads ]
+            r = p.wait()
+        except KeyboardInterrupt:
+            # Child got Ctrl+C,
+            print("== CTRL+C caught by git-results; child should exit as per "
+                    "CTRL+C semantics...")
+            [ t.join() for t in threads ]
+            r = p.wait()
+            didAbort = True
 
         print("=" * 80)
         print("=" * 80)
@@ -193,7 +204,7 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         if r != 0:
             error.write(("\n\ngit-results detected abnormal program "
                     "termination: {}\n").format(r))
-        return r
+        return r, didAbort
     finally:
         os.chdir(odir)
 
@@ -268,7 +279,8 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     while True:
         tagDir = os.path.join(resultsBaseRelative, tag + "/{}".format(n))
         if (not os.path.exists(tagDir)
-                and not os.path.exists(tagDir + FAIL_SUFFIX)):
+                and not os.path.exists(tagDir + FAIL_SUFFIX)
+                and not os.path.exists(tagDir + ABORT_SUFFIX)):
             break
         n += 1
     tag = tag + "/{}".format(n)
@@ -395,10 +407,12 @@ if __name__ == '__main__':
                 if e.errno != 17:
                     raise
         try:
-            r = runExperiment(expDir, resultsDir, commitTag, args.trim)
+            r, abrt = runExperiment(expDir, resultsDir, commitTag, args.trim)
             if r != 0:
                 print("Non-zero exit status: {}".format(r))
                 runFailed = True
+                if abrt:
+                    runFailed = "abort"
             else:
                 print("OK")
         finally:
@@ -419,9 +433,12 @@ if __name__ == '__main__':
     if runFailed:
         # We failed, but not due to a build failure.
         # Move our numbered file to one like "3-fail"
-        print("Moving {} to {}".format(resultsDir, resultsDir + FAIL_SUFFIX))
-        os.rename(resultsDir, resultsDir + FAIL_SUFFIX)
+        suffix = FAIL_SUFFIX
+        if runFailed == "abort":
+            suffix = ABORT_SUFFIX
+        print("Moving {} to {}".format(resultsDir, resultsDir + suffix))
+        os.rename(resultsDir, resultsDir + suffix)
         oldLink = os.readlink(datedLink)
         os.unlink(datedLink)
-        os.symlink(oldLink + FAIL_SUFFIX, datedLink + FAIL_SUFFIX)
+        os.symlink(oldLink + suffix, datedLink + suffix)
         sys.exit(1)
