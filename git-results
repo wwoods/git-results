@@ -317,8 +317,8 @@ def checkTag(s):
     """Takes a string s and returns it, if it is a tag."""
     if re.search("^[a-zA-Z0-9_/-]+$", s) is None:
         raise ValueError("Tag must match regex [a-zA-Z0-9_-/]+")
-    if s == 'dated':
-        raise ValueError("Tag may not be 'dated'")
+    if s.startswith('dated'):
+        raise ValueError("Tag may not start with 'dated'")
     if s.strip('/') != s:
         raise ValueError("Tag may not begin or end with '/'")
     return s
@@ -346,6 +346,11 @@ if __name__ == '__main__':
     ap.add_argument("-d", "--dir", default = "results", help = "Directory used "
             "to store results.  Automatically created and set up as a git "
             "repo.  Also automatically added to .gitignore")
+    ap.add_argument("-p", "--path", action = 'store_true',
+            help = "Supercedes -d and normal default tag argument.  The first "
+                "path element in the tag argument becomes the results "
+                "directory, and the rest becomes the tag.  Useful for e.g. "
+                "tab completion in a console.")
     ap.add_argument("-c", "--commit", action = 'store_true',
             help = "If there are uncommitted changes, automatically commit "
                 "with the message as given.")
@@ -364,6 +369,19 @@ if __name__ == '__main__':
             to specify a tag that already exists.  "dated" is also an invalid option, as that is
             a unique folder created by git-results to help with indexing results by date."""))
     args = ap.parse_args()
+    if args.path:
+        # Override dir and tag
+        path = args.tag
+        args.tag = ""
+        while True:
+            s = os.path.split(path)
+            if s[0]:
+                args.tag = os.path.join(s[1], args.tag)
+                path = s[0]
+            else:
+                args.dir = s[1]
+                args.tag = args.tag.strip('/')
+                break
     checkTag(args.tag)
     if not args.message:
         raise NotImplementedError("You need to use the -m flag to pass your message")
