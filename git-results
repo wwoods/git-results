@@ -2,6 +2,14 @@
 
 from __future__ import print_function
 
+"""TODO -
+
+Need a clean command to delete an exact tag an any children of it, also cleaning
+up the git repository, so that a branch can be renamed.
+
+Probably want to commit on the results repo as well...
+"""
+
 import argparse
 import datetime
 import os
@@ -203,6 +211,8 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
         checked("git add .")
         checked('git commit -m "{}"'.format(cleanMessage))
 
+    curCommit = checkedOutput("git rev-parse HEAD").strip()
+
     # Make the actual results folder
     # Allow / encourage running same tag several times.  We'll use /1, /2, etc
     n = 1
@@ -222,7 +232,8 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
 
     linkAs = os.path.join(dated, "{}-{}".format(now.strftime("%d"), tag))
     safeMake(os.path.dirname(linkAs))
-    checked("ln -s '../../../{}' '{}'".format(tag, linkAs))
+    parentLevel = 2 + len(tag.split('/'))
+    checked("ln -s '{}{}' '{}'".format('../' * parentLevel, tag, linkAs))
 
     # Add our tag
     gitTag = "{}/{}".format(resultsBaseRelative, tag)
@@ -231,6 +242,7 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     # Write our message file
     with open(os.path.join(tagDir, "git-results-message"), "w") as f:
         f.write(message)
+        f.write("\n\nCommit: {}".format(curCommit))
         f.write("\n\ngit-results-run\n---------------\n")
         f.write(open('git-results-run').read())
 
@@ -243,6 +255,8 @@ def checkTag(s):
         raise ValueError("Tag must match regex [a-zA-Z0-9_-/]+")
     if s == 'dated':
         raise ValueError("Tag may not be 'dated'")
+    if s.strip('/') != s:
+        raise ValueError("Tag may not begin or end with '/'")
     return s
 
 
@@ -284,6 +298,7 @@ if __name__ == '__main__':
     checkTag(args.tag)
     if not args.message:
         raise NotImplementedError("You need to use the -m flag to pass your message")
+    args.dir = args.dir.rstrip('/')
 
     if not os.path.isfile('git-results-build'):
         print(textwrap.dedent("""
@@ -328,8 +343,8 @@ if __name__ == '__main__':
             else:
                 print("OK")
         finally:
-            #shutil.rmtree(expDir)
-            print("Left " + expDir)
+            shutil.rmtree(expDir)
+            safeRollback(os.path.dirname(expDir))
     except:
         # Roll back our tag and results folders...
         traceback.print_exc()
