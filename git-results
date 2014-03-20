@@ -1,5 +1,7 @@
 #! /usr/bin/python2
 
+"""Created by Walt Woods, 2014"""
+
 from __future__ import print_function
 
 import argparse
@@ -28,7 +30,7 @@ class FolderState(object):
         self._scan(dir)
 
 
-    def copyResultsTo(self, dir):
+    def copyResultsTo(self, dir, trimCommonPaths = False):
         """Copy changes from self._dir to dir.  Use most common path."""
         allChanges = set()
         self._scanChanges(self._dir, allChanges)
@@ -44,7 +46,12 @@ class FolderState(object):
         for c in allChanges:
             # Add 1 to len(prefix) so that we don't include the preceding slash,
             # which would make os.path.join treat it as an absolute
-            shutil.copy2(c, os.path.join(dir, c[len(prefix) + 1:]))
+            target = os.path.relpath(c, self._dir)
+            if trimCommonPaths:
+                target = os.path.relpath(c, prefix)
+            target = os.path.join(dir, target)
+            safeMake(os.path.dirname(target))
+            shutil.copy2(c, target)
 
 
     def _scan(self, path):
@@ -119,7 +126,7 @@ def tee(infile, *files):
     return t
 
 
-def runExperiment(dir, resultsDir, commitTag):
+def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
     """Given a directory to initialize and run our experiment in 'dir', run it
     and put results in 'resultsDir'"""
 
@@ -174,7 +181,7 @@ def runExperiment(dir, resultsDir, commitTag):
 
         # If we reach here, everything ran OK, so copy files
         print("Copying results to {}...".format(resultsDirRelative))
-        fs.copyResultsTo(resultsDir)
+        fs.copyResultsTo(resultsDir, trimCommonPaths)
 
         allDone = time.time()
         with open(os.path.join(resultsDir, 'git-results-message'), 'a') as f:
@@ -330,6 +337,11 @@ if __name__ == '__main__':
     ap.add_argument("-c", "--commit", action = 'store_true',
             help = "If there are uncommitted changes, automatically commit "
                 "with the message as given.")
+    ap.add_argument("-t", "--trim", action = 'store_true',
+            help = "Trim output paths to most common denominator.  That is, if "
+                "the application creates folder results/a.txt, then since the "
+                "results/ path is part of all created files, it will be "
+                "trimmed (leaving just a.txt).")
     ap.add_argument("-m", "--message", help = "Commit message / "
             "git-results-message content paired with results.  If unspecified, "
             "we'll pop open an editor for you (like git commit)")
@@ -383,7 +395,7 @@ if __name__ == '__main__':
                 if e.errno != 17:
                     raise
         try:
-            r = runExperiment(expDir, resultsDir, commitTag)
+            r = runExperiment(expDir, resultsDir, commitTag, args.trim)
             if r != 0:
                 print("Non-zero exit status: {}".format(r))
                 runFailed = True

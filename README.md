@@ -96,6 +96,12 @@ less designed for at the moment, changing it could alter your running test if
 builds were in-place).
 
 
+Changelog
+---------
+
+* 2014-3-20 - Shared path trimming is opt-in with -t
+
+
 TODO
 ----
 
