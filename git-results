@@ -163,8 +163,8 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         fs = FolderState(dir)
 
         print("Running {} in {}...".format(commitTag, dirRelative))
-        print("=" * 80)
-        print("=" * 80)
+        print("=" * 79)
+        print("=" * 79)
         preRun = time.time()
 
         threads = None
@@ -187,8 +187,8 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
             r = p.wait()
             didAbort = True
 
-        print("=" * 80)
-        print("=" * 80)
+        print("=" * 79)
+        print("=" * 79)
 
         # If we reach here, everything ran OK, so copy files
         print("Copying results to {}...".format(resultsDirRelative))
@@ -303,6 +303,7 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
 
     # Write our message file
     with open(os.path.join(tagDir, "git-results-message"), "w") as f:
+        f.write("{}\n{}\n".format(gitTag, "=" * min(79, len(gitTag))))
         f.write(message)
         f.write("\n\nCommit: {}".format(curCommit))
         f.write("\n\ngit-results-run\n---------------\n")
