@@ -171,8 +171,9 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         didAbort = False
         try:
             # Special handling for our runner script
-            output = open('{}/stdout'.format(resultsDir), 'w')
-            error = open('{}/stderr'.format(resultsDir), 'w')
+            line_buffered = 1
+            output = open('{}/stdout'.format(resultsDir), 'w', line_buffered)
+            error = open('{}/stderr'.format(resultsDir), 'w', line_buffered)
             p = subprocess.Popen(os.path.abspath('./git-results-run'), shell = True,
                     stdout = subprocess.PIPE, stderr = subprocess.PIPE)
             threads = [ tee(p.stdout, output, sys.stdout),
@@ -204,6 +205,10 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         if r != 0:
             error.write(("\n\ngit-results detected abnormal program "
                     "termination: {}\n").format(r))
+            print("Non-zero exit status after {}: {}".format(allDone - preRun,
+                    r))
+        else:
+            print("OK after {}".format(allDone - preRun))
         return r, didAbort
     finally:
         os.chdir(odir)
@@ -337,7 +342,7 @@ def safeRollback(d):
             raise
 
 
-if __name__ == '__main__':
+def run(programArgs = None):
     if not os.path.isdir('.git'):
         print("Must be used in a git directory!")
         sys.exit(1)
@@ -369,7 +374,8 @@ if __name__ == '__main__':
             folders "parity" and subfolder "squids" to store the results in.  It is an error
             to specify a tag that already exists.  "dated" is also an invalid option, as that is
             a unique folder created by git-results to help with indexing results by date."""))
-    args = ap.parse_args()
+    args = ap.parse_args(programArgs)
+
     if args.path:
         # Override dir and tag
         path = args.tag
@@ -428,12 +434,9 @@ if __name__ == '__main__':
         try:
             r, abrt = runExperiment(expDir, resultsDir, commitTag, args.trim)
             if r != 0:
-                print("Non-zero exit status: {}".format(r))
                 runFailed = True
                 if abrt:
                     runFailed = "abort"
-            else:
-                print("OK")
         finally:
             shutil.rmtree(expDir)
             safeRollback(os.path.dirname(expDir))
@@ -461,3 +464,7 @@ if __name__ == '__main__':
         os.unlink(datedLink)
         os.symlink(oldLink + suffix, datedLink + suffix)
         sys.exit(1)
+
+
+if __name__ == '__main__':
+    run()

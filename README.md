@@ -107,11 +107,15 @@ builds were in-place).
 Changelog
 ---------
 
+* 2014-3-21 - Print time it took to run in last message, flushes stdout and
+  stderr with each line rather than when OS buffer is full.  Tests.
 * 2014-3-20 - Shared path trimming is opt-in with -t
 
 
 TODO
 ----
+
+* Need a move command for reorganizing
 
 * Need a clean command to delete an exact tag an any children of it, also
   cleaning up the git repository, so that a tag can be reused.
