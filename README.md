@@ -108,7 +108,8 @@ Changelog
 ---------
 
 * 2014-3-21 - Print time it took to run in last message, flushes stdout and
-  stderr with each line rather than when OS buffer is full.  Tests.
+  stderr with each line rather than when OS buffer is full.  Tests.  Removed ...
+  so double-click works with paths.
 * 2014-3-20 - Shared path trimming is opt-in with -t
 
 

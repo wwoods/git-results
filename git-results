@@ -148,7 +148,7 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
 
         preBuild = time.time()
 
-        print("Building {} in {}...".format(commitTag, dirRelative))
+        print("Building {} in {}".format(commitTag, dirRelative))
         p = subprocess.Popen(os.path.abspath('./git-results-build'),
                 shell = True)
         p.communicate()
@@ -162,7 +162,7 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         # common path too...
         fs = FolderState(dir)
 
-        print("Running {} in {}...".format(commitTag, dirRelative))
+        print("Running {} in {}".format(commitTag, dirRelative))
         print("=" * 79)
         print("=" * 79)
         preRun = time.time()
@@ -183,7 +183,7 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         except KeyboardInterrupt:
             # Child got Ctrl+C,
             print("== CTRL+C caught by git-results; child should exit as per "
-                    "CTRL+C semantics...")
+                    "CTRL+C semantics")
             [ t.join() for t in threads ]
             r = p.wait()
             didAbort = True
@@ -192,7 +192,7 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         print("=" * 79)
 
         # If we reach here, everything ran OK, so copy files
-        print("Copying results to {}...".format(resultsDirRelative))
+        print("Copying results to {}".format(resultsDirRelative))
         fs.copyResultsTo(resultsDir, trimCommonPaths)
 
         allDone = time.time()
