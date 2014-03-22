@@ -107,6 +107,9 @@ builds were in-place).
 Changelog
 ---------
 
+* 2014-3-22 - -i --in-place flag for in-place builds.  Not recommended for 
+  anything other than getting a build working or experiments with very short
+  runtimes.
 * 2014-3-21 - Print time it took to run in last message, flushes stdout and
   stderr with each line rather than when OS buffer is full.  Tests.  Removed ...
   so double-click works with paths.

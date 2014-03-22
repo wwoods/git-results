@@ -48,8 +48,8 @@ class TestGitResults(unittest.TestCase):
         os.chdir(self.__oldDir)
 
 
-    def test_readme(self):
-        # Ensure the README behavior works
+    def _setupRepo(self):
+        """Initializes the "tmp" directory with a basic repo from the readme."""
         try:
             shutil.rmtree("tmp")
         except OSError, e:
@@ -65,11 +65,18 @@ class TestGitResults(unittest.TestCase):
         checked("git add hello_world")
         checked("git commit -m 'First version'")
 
-        open("git-results-build", "w").close()
+        with open("git-results-build", "w") as f:
+            # Even though this isn't in the readme, ensure isolation is a thing
+            f.write("cp hello_world hello_world_2")
         addExec("git-results-build")
         with open("git-results-run", "w") as f:
-            f.write("./hello_world")
+            f.write("./hello_world_2")
         addExec("git-results-run")
+
+
+    def test_readme(self):
+        # Ensure the README behavior works
+        self._setupRepo()
 
         try:
             git_results.run(shlex.split('-c test/run -m "Let\'s see if it '
@@ -80,6 +87,8 @@ class TestGitResults(unittest.TestCase):
         self.assertEqual("Hello, world\n",
                 open('results/test/run/1/stdout').read())
         self.assertEqual("", open('results/test/run/1/stderr').read())
+        self.assertNotIn('hello_world_2', os.listdir('.'))
+        self.assertNotIn('hello_world_2', os.listdir('results/test/run/1'))
 
         # -p flag should work
         try:
@@ -90,6 +99,8 @@ class TestGitResults(unittest.TestCase):
         self.assertEqual("Hello, world\n",
                 open('results/test/run/2/stdout').read())
         self.assertEqual("", open('results/test/run/2/stderr').read())
+        self.assertNotIn('hello_world_2', os.listdir('.'))
+        self.assertNotIn('hello_world_2', os.listdir('results/test/run/2'))
 
         # Now see if a failed test gets renamed appropriately
         with open("hello_world", "w") as f:
@@ -101,5 +112,24 @@ class TestGitResults(unittest.TestCase):
         err = open('results/test/run/3-fail/stderr').read()
         self.assertIn("ezeeeeecho", err.lower())
         self.assertIn("not found", err.lower())
+        self.assertNotIn('hello_world_2', os.listdir('.'))
+        self.assertNotIn('hello_world_2', os.listdir('results/test/run/3-fail'))
 
         self.assertEqual(False, os.path.exists('results/test/run/3'))
+
+
+    def test_inPlace(self):
+        # Ensure that in-place works
+        self._setupRepo()
+        try:
+            git_results.run(shlex.split("-cip wresults/in/place -m 'hmm'"))
+        except SystemExit, e:
+            self.fail(str(e))
+
+        self.assertEqual("Hello, world\n",
+                open('wresults/in/place/1/stdout').read())
+        self.assertEqual("", open('wresults/in/place/1/stderr').read())
+        # Build should have happened locally
+        self.assertIn('hello_world_2', os.listdir('.'))
+        # But not counted as a result
+        self.assertNotIn('hello_world_2', os.listdir('wresults/in/place/1'))

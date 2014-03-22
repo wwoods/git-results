@@ -25,10 +25,17 @@ class FolderState(object):
     """An object that tracks which files exist at init and at another time,
     and can copy changes to another folder."""
 
-    def __init__(self, dir):
-        self._dir = dir
+    def __init__(self, dir, resultsDir):
+        self._dir = dir or os.path.abspath('.')
+        self._resultsDirRel = os.path.relpath(resultsDir, self._dir)
+        if not self._resultsDirRel.startswith(".."):
+            while True:
+                rdr = os.path.split(self._resultsDirRel)[0]
+                if not rdr:
+                    break
+                self._resultsDirRel = rdr[0]
         self._files = set()
-        self._scan(dir)
+        self._scan(self._dir)
 
 
     def copyResultsTo(self, dir, trimCommonPaths = False):
@@ -55,7 +62,15 @@ class FolderState(object):
             shutil.copy2(c, target)
 
 
+    def _isBanned(self, path):
+        if path == os.path.join(self._dir, self._resultsDirRel):
+            return True
+        return False
+
+
     def _scan(self, path):
+        if self._isBanned(path):
+            return
         for f in os.listdir(path):
             ff = os.path.join(path, f)
             if os.path.isfile(ff):
@@ -65,6 +80,8 @@ class FolderState(object):
 
 
     def _scanChanges(self, path, changeset):
+        if self._isBanned(path):
+            return
         for f in os.listdir(path):
             ff = os.path.join(path, f)
             if os.path.isfile(ff) and ff not in self._files:
@@ -129,22 +146,30 @@ def tee(infile, *files):
 
 def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
     """Given a directory to initialize and run our experiment in 'dir', run it
-    and put results in 'resultsDir'"""
+    and put results in 'resultsDir'
 
-    dirRelative = dir
-    dir = os.path.abspath(dir)
+    dir can be None for current dir (not a temporary directory!)
+    """
+
+    if dir is None:
+        dirRelative = '.'
+    else:
+        dirRelative = dir
+        dir = os.path.abspath(dir)
     resultsDirRelative = resultsDir
     resultsDir = os.path.abspath(resultsDir)
     odir = os.getcwd()
     try:
-        os.chdir(dir)
-        checked('git init')
-        checked('git remote add origin file://{}'.format(odir))
-        checked('git fetch origin {}'.format(commitTag))
-        checked('git reset --hard FETCH_HEAD')
-        copySymlinks(odir, dir)
-        for grFile in [ "git-results-build", "git-results-run" ]:
-            shutil.copy2(os.path.join(odir, grFile), os.path.join(dir, grFile))
+        if dir is not None:
+            os.chdir(dir)
+            checked('git init')
+            checked('git remote add origin file://{}'.format(odir))
+            checked('git fetch origin {}'.format(commitTag))
+            checked('git reset --hard FETCH_HEAD')
+            copySymlinks(odir, dir)
+            for grFile in [ "git-results-build", "git-results-run" ]:
+                shutil.copy2(os.path.join(odir, grFile), os.path.join(dir,
+                        grFile))
 
         preBuild = time.time()
 
@@ -160,7 +185,7 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         # Now that we've built it, snapshot the folder so we can copy whatever
         # changed as results.  We'll be a little smart and take off the greatest
         # common path too...
-        fs = FolderState(dir)
+        fs = FolderState(dir, resultsDir)
 
         print("Running {} in {}".format(commitTag, dirRelative))
         print("=" * 79)
@@ -357,6 +382,11 @@ def run(programArgs = None):
                 "path element in the tag argument becomes the results "
                 "directory, and the rest becomes the tag.  Useful for e.g. "
                 "tab completion in a console.")
+    ap.add_argument("-i", "--in-place", action = 'store_true',
+            help = "Do the build in place.  If you use this, you can't run "
+                "several simultaneous git results calls on the same repo.  "
+                "Recommended when you're trying to get a build working, or "
+                "testing short experiments, but not otherwise.")
     ap.add_argument("-c", "--commit", action = 'store_true',
             help = "If there are uncommitted changes, automatically commit "
                 "with the message as given.")
@@ -418,19 +448,22 @@ def run(programArgs = None):
         # standard tempfile methods.  The path has to be accessible on all
         # machines.
         expDir = None
-        safeMake(os.path.join(args.dir, ".tmp"))
-        while True:
-            randName = "".join([
-                    random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-                    for _ in range(8) ])
-            expDir = os.path.join(args.dir, ".tmp", randName)
-            try:
-                os.mkdir(expDir)
-                break
-            except OSError, e:
-                # Already exists
-                if e.errno != 17:
-                    raise
+        if args.in_place:
+            expDir = None
+        else:
+            safeMake(os.path.join(args.dir, ".tmp"))
+            while True:
+                randName = "".join([
+                        random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+                        for _ in range(8) ])
+                expDir = os.path.join(args.dir, ".tmp", randName)
+                try:
+                    os.mkdir(expDir)
+                    break
+                except OSError, e:
+                    # Already exists
+                    if e.errno != 17:
+                        raise
         try:
             r, abrt = runExperiment(expDir, resultsDir, commitTag, args.trim)
             if r != 0:
@@ -438,8 +471,9 @@ def run(programArgs = None):
                 if abrt:
                     runFailed = "abort"
         finally:
-            shutil.rmtree(expDir)
-            safeRollback(os.path.dirname(expDir))
+            if expDir is not None:
+                shutil.rmtree(expDir)
+                safeRollback(os.path.dirname(expDir))
     except:
         # Roll back our tag and results folders...
         traceback.print_exc()
