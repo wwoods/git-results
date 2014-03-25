@@ -121,6 +121,8 @@ including in progress runs.
 Changelog
 ---------
 
+* 2014-3-25 - "latest" special folder to allow access to paths without having
+  to tab through the build number.  -run suffix for tests that are in progress.
 * 2014-3-22 - -i --in-place flag for in-place builds.  Not recommended for 
   anything other than getting a build working or experiments with very short
   runtimes.
