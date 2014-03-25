@@ -20,6 +20,8 @@ import traceback
 
 ABORT_SUFFIX = '-abrt'
 FAIL_SUFFIX = '-fail'
+RUN_SUFFIX = '-run'
+SUFFIXES = [ '', ABORT_SUFFIX, FAIL_SUFFIX, RUN_SUFFIX ]
 
 class FolderState(object):
     """An object that tracks which files exist at init and at another time,
@@ -159,7 +161,10 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
     resultsDirRelative = resultsDir
     resultsDir = os.path.abspath(resultsDir)
     odir = os.getcwd()
+    tmpDirLink = os.path.join(resultsDir, 'git-results-tmp')
     try:
+        os.symlink(os.path.abspath(dir or '.'), tmpDirLink)
+
         if dir is not None:
             os.chdir(dir)
             checked('git init')
@@ -237,6 +242,7 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         return r, didAbort
     finally:
         os.chdir(odir)
+        os.unlink(tmpDirLink)
 
 
 def safeMake(path):
@@ -253,7 +259,7 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     state.
 
     Returns the directory for results (absolute path), dated symlink path (for
-    rollback), and the commit tag to run.
+    rollback / updated), latest symlink path, and the commit tag to run.
     """
     resultsBaseRelative = resultsDir
     resultsDir = os.path.abspath(resultsDir)
@@ -275,11 +281,10 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     n = 1
     while True:
         tagDir = os.path.join(resultsBaseRelative, tag + "/{}".format(n))
-        if (not os.path.exists(tagDir)
-                and not os.path.exists(tagDir + FAIL_SUFFIX)
-                and not os.path.exists(tagDir + ABORT_SUFFIX)):
+        if not any([ os.path.exists(tagDir + s) for s in SUFFIXES ]):
             break
         n += 1
+    pureTag = tag
     tag = tag + "/{}".format(n)
     gitTag = "{}/{}".format(resultsBaseRelative, tag)
 
@@ -319,7 +324,8 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     curCommit = checkedOutput("git rev-parse HEAD").strip()
 
     # Actually make our folder
-    safeMake(tagDir)
+    tagDirRun = tagDir + RUN_SUFFIX
+    safeMake(tagDirRun)
 
     # Dated linkage
     now = datetime.datetime.now()
@@ -327,16 +333,28 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
             now.strftime("%m"))
     safeMake(dated)
 
-    linkAs = os.path.join(dated, "{}-{}".format(now.strftime("%d"), tag))
+    linkAs = os.path.join(dated, "{}-{}{}".format(now.strftime("%d"), tag,
+            RUN_SUFFIX))
     safeMake(os.path.dirname(linkAs))
     parentLevel = 2 + len(tag.split('/'))
-    checked("ln -s '{}{}' '{}'".format('../' * parentLevel, tag, linkAs))
+    os.symlink("{}{}{}".format('../' * parentLevel, tag, RUN_SUFFIX),
+            linkAs)
+
+    latestLinkAs = os.path.join(resultsDir, 'latest', pureTag + RUN_SUFFIX)
+    safeMake(os.path.dirname(latestLinkAs))
+    for s in SUFFIXES:
+        linkPath = os.path.join(resultsDir, 'latest', pureTag + s)
+        if os.path.exists(linkPath):
+            os.unlink(linkPath)
+    os.symlink(
+            "{}{}{}".format('../' * len(pureTag.split('/')), tag, RUN_SUFFIX),
+            latestLinkAs)
 
     # Add our tag to the git repo
     checked('git tag -a -m "{}" {}'.format(cleanMessage, gitTag))
 
     # Write our message file
-    with open(os.path.join(tagDir, "git-results-message"), "w") as f:
+    with open(os.path.join(tagDirRun, "git-results-message"), "w") as f:
         f.write("{}\n{}\n".format(gitTag, "=" * min(79, len(gitTag))))
         if message:
             f.write("{}\n".format(message))
@@ -346,7 +364,7 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
         f.write("\n\ngit-results-build\n-----------------\n")
         f.write(open('git-results-build').read())
 
-    return tagDir, linkAs, gitTag
+    return tagDirRun, linkAs, latestLinkAs, gitTag
 
 
 def checkTag(s):
@@ -355,6 +373,8 @@ def checkTag(s):
         raise ValueError("Tag must match regex [a-zA-Z0-9_-/]+")
     if s.startswith('dated'):
         raise ValueError("Tag may not start with 'dated'")
+    if s.startswith('latest'):
+        raise ValueError("Tag may not start with 'latest'")
     if s.strip('/') != s:
         raise ValueError("Tag may not begin or end with '/'")
     return s
@@ -408,7 +428,8 @@ def run(programArgs = None):
             will create a git tag for the commit as results/parity/squids, and will create the
             folders "parity" and subfolder "squids" to store the results in.  It is an error
             to specify a tag that already exists.  "dated" is also an invalid option, as that is
-            a unique folder created by git-results to help with indexing results by date."""))
+            a unique folder created by git-results to help with indexing results by date.
+            "latest" is invalid as well, referring to another unique folder."""))
     args = ap.parse_args(programArgs)
 
     if args.path:
@@ -442,8 +463,11 @@ def run(programArgs = None):
         sys.exit(1)
 
     # OK, run the experiment
-    resultsDir, datedLink, commitTag = setupExperiment(args.dir, args.commit,
-            args.tag, args.message)
+    resultsDirRun, datedLinkRun, latestLinkRun, commitTag = setupExperiment(
+            args.dir, args.commit, args.tag, args.message)
+    resultsDir = resultsDirRun[:-len(RUN_SUFFIX)]
+    datedLink = datedLinkRun[:-len(RUN_SUFFIX)]
+    latestLink = latestLinkRun[:-len(RUN_SUFFIX)]
 
     runFailed = False
     try:
@@ -468,7 +492,7 @@ def run(programArgs = None):
                     if e.errno != 17:
                         raise
         try:
-            r, abrt = runExperiment(expDir, resultsDir, commitTag, args.trim)
+            r, abrt = runExperiment(expDir, resultsDirRun, commitTag, args.trim)
             if r != 0:
                 runFailed = True
                 if abrt:
@@ -480,26 +504,44 @@ def run(programArgs = None):
     except:
         # Roll back our tag and results folders...
         traceback.print_exc()
-        print("Deleting {} and associated tags / links".format(resultsDir))
+        print("Deleting {} and associated tags / links".format(resultsDirRun))
         checked("git tag -d {}".format(commitTag))
-        os.unlink(datedLink)
-        safeRollback(os.path.dirname(datedLink))
-        shutil.rmtree(resultsDir)
-        safeRollback(os.path.dirname(resultsDir))
+        os.unlink(datedLinkRun)
+        safeRollback(os.path.dirname(datedLinkRun))
+        if os.path.abspath(os.path.join(os.path.dirname(latestLinkRun),
+                oldLink)) == os.path.abspath(resultsDirRun):
+            os.unlink(latestLinkRun)
+            safeRollback(os.path.dirname(latestLinkRun))
+        shutil.rmtree(resultsDirRun)
+        safeRollback(os.path.dirname(resultsDirRun))
         # Build failed for sure!
         sys.exit(1)
 
+    # Move the RUN_SUFFIX folder to the appropriate suffix
+    newSuffix = ""
     if runFailed:
         # We failed, but not due to a build failure.
         # Move our numbered file to one like "3-fail"
-        suffix = FAIL_SUFFIX
+        newSuffix = FAIL_SUFFIX
         if runFailed == "abort":
-            suffix = ABORT_SUFFIX
-        print("Moving {} to {}".format(resultsDir, resultsDir + suffix))
-        os.rename(resultsDir, resultsDir + suffix)
-        oldLink = os.readlink(datedLink)
-        os.unlink(datedLink)
-        os.symlink(oldLink + suffix, datedLink + suffix)
+            newSuffix = ABORT_SUFFIX
+
+    print("Moving {} to {}".format(resultsDirRun, resultsDir + newSuffix))
+    os.rename(resultsDirRun, resultsDir + newSuffix)
+
+    oldLink = os.readlink(datedLinkRun)
+    os.unlink(datedLinkRun)
+    os.symlink(oldLink[:-len(RUN_SUFFIX)] + newSuffix, datedLink + newSuffix)
+
+    oldLink = os.readlink(latestLinkRun)
+    if (os.path.abspath(os.path.join(os.path.dirname(latestLinkRun), oldLink))
+            == os.path.abspath(resultsDirRun)):
+        # We were the latest test, so do the update
+        os.unlink(latestLinkRun)
+        os.symlink(oldLink[:-len(RUN_SUFFIX)] + newSuffix,
+                latestLink + newSuffix)
+
+    if runFailed:
         sys.exit(1)
 
 

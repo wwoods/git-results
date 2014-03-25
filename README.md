@@ -104,6 +104,20 @@ less designed for at the moment, changing it could alter your running test if
 builds were in-place).
 
 
+Special Directories
+-------------------
+
+git-results automatically makes "dated" and "latest" folders.
+
+"dated" contains
+a folder hierarchy ending in symlinks to the results for experiments, organized
+by date.  For instance, results/dated/2014/03/24-test/run/2 would be a symlink
+to results/test/run/2.  It's a longer path of course, but it's indexed by date.
+
+"latest" contains a folder hierarchy pointing the the most recent run of a test,
+including in progress runs.
+
+
 Changelog
 ---------
 

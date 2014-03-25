@@ -1,4 +1,5 @@
 
+import datetime
 import imp
 import os
 import shlex
@@ -94,6 +95,10 @@ class TestGitResults(unittest.TestCase):
         # Ensure the README behavior works
         self._setupRepo()
 
+        now = datetime.datetime.now()
+        datedFolder = 'results/dated/{}/{}/{}-test/run'.format(
+                now.strftime("%Y"), now.strftime("%m"), now.strftime("%d"))
+
         try:
             git_results.run(shlex.split('-c test/run -m "Let\'s see if it '
                     'prints"'))
@@ -102,6 +107,10 @@ class TestGitResults(unittest.TestCase):
 
         self.assertEqual("Hello, world\n",
                 open('results/test/run/1/stdout').read())
+        self.assertEqual("Hello, world\n",
+                open(os.path.join(datedFolder, '1/stdout')).read())
+        self.assertEqual("Hello, world\n",
+                open("results/latest/test/run/stdout").read())
         self.assertEqual("", open('results/test/run/1/stderr').read())
         self.assertNotIn('hello_world_2', os.listdir('.'))
         self.assertNotIn('hello_world_2', os.listdir('results/test/run/1'))
@@ -114,6 +123,10 @@ class TestGitResults(unittest.TestCase):
 
         self.assertEqual("Hello, world\n",
                 open('results/test/run/2/stdout').read())
+        self.assertEqual("Hello, world\n",
+                open(os.path.join(datedFolder, '2/stdout')).read())
+        self.assertEqual("Hello, world\n",
+                open("results/latest/test/run/stdout").read())
         self.assertEqual("", open('results/test/run/2/stderr').read())
         self.assertNotIn('hello_world_2', os.listdir('.'))
         self.assertNotIn('hello_world_2', os.listdir('results/test/run/2'))
@@ -125,6 +138,9 @@ class TestGitResults(unittest.TestCase):
             git_results.run(shlex.split('-c test/run -m "take 3"'))
 
         self.assertEqual("", open('results/test/run/3-fail/stdout').read())
+        self.assertEqual("",
+                open(os.path.join(datedFolder, '3-fail/stdout')).read())
+        self.assertEqual("", open("results/latest/test/run-fail/stdout").read())
         err = open('results/test/run/3-fail/stderr').read()
         self.assertIn("ezeeeeecho", err.lower())
         self.assertIn("not found", err.lower())
