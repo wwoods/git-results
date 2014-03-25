@@ -74,6 +74,22 @@ class TestGitResults(unittest.TestCase):
         addExec("git-results-run")
 
 
+    def test_noMessage(self):
+        # Ensure it works without a message...
+        self._setupRepo()
+
+        try:
+            git_results.run(shlex.split("-c test/run"))
+        except SystemExit, e:
+            self.fail(str(e))
+
+        self.assertEqual("Hello, world\n",
+                open('results/test/run/1/stdout').read())
+        self.assertEqual("", open('results/test/run/1/stderr').read())
+        self.assertNotIn('hello_world_2', os.listdir('.'))
+        self.assertNotIn('hello_world_2', os.listdir('results/test/run/1'))
+
+
     def test_readme(self):
         # Ensure the README behavior works
         self._setupRepo()

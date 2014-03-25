@@ -271,8 +271,23 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     # Now that it's made, make sure it's ignored
     ensureGitignore(resultsBaseRelative)
 
-    cleanMessage = message.replace('"', '\\"').replace("&", "\\&"
-            ).replace("|", "\\|").replace("!", "\\!")
+    # Allow / encourage running same tag several times.  We'll use /1, /2, etc
+    n = 1
+    while True:
+        tagDir = os.path.join(resultsBaseRelative, tag + "/{}".format(n))
+        if (not os.path.exists(tagDir)
+                and not os.path.exists(tagDir + FAIL_SUFFIX)
+                and not os.path.exists(tagDir + ABORT_SUFFIX)):
+            break
+        n += 1
+    tag = tag + "/{}".format(n)
+    gitTag = "{}/{}".format(resultsBaseRelative, tag)
+
+    if not message:
+        cleanMessage = gitTag
+    else:
+        cleanMessage = message.replace('"', '\\"').replace("&", "\\&"
+                ).replace("|", "\\|").replace("!", "\\!")
 
     # Check the state of our git repo
     if checkedOutput("git status --porcelain").strip():
@@ -303,17 +318,7 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
 
     curCommit = checkedOutput("git rev-parse HEAD").strip()
 
-    # Make the actual results folder
-    # Allow / encourage running same tag several times.  We'll use /1, /2, etc
-    n = 1
-    while True:
-        tagDir = os.path.join(resultsBaseRelative, tag + "/{}".format(n))
-        if (not os.path.exists(tagDir)
-                and not os.path.exists(tagDir + FAIL_SUFFIX)
-                and not os.path.exists(tagDir + ABORT_SUFFIX)):
-            break
-        n += 1
-    tag = tag + "/{}".format(n)
+    # Actually make our folder
     safeMake(tagDir)
 
     # Dated linkage
@@ -327,15 +332,15 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     parentLevel = 2 + len(tag.split('/'))
     checked("ln -s '{}{}' '{}'".format('../' * parentLevel, tag, linkAs))
 
-    # Add our tag
-    gitTag = "{}/{}".format(resultsBaseRelative, tag)
+    # Add our tag to the git repo
     checked('git tag -a -m "{}" {}'.format(cleanMessage, gitTag))
 
     # Write our message file
     with open(os.path.join(tagDir, "git-results-message"), "w") as f:
         f.write("{}\n{}\n".format(gitTag, "=" * min(79, len(gitTag))))
-        f.write(message)
-        f.write("\n\nCommit: {}".format(curCommit))
+        if message:
+            f.write("{}\n".format(message))
+        f.write("\nCommit: {}".format(curCommit))
         f.write("\n\ngit-results-run\n---------------\n")
         f.write(open('git-results-run').read())
         f.write("\n\ngit-results-build\n-----------------\n")
@@ -420,8 +425,6 @@ def run(programArgs = None):
                 args.tag = args.tag.strip('/')
                 break
     checkTag(args.tag)
-    if not args.message:
-        raise NotImplementedError("You need to use the -m flag to pass your message")
     args.dir = args.dir.rstrip('/')
 
     if not os.path.isfile('git-results-build'):
