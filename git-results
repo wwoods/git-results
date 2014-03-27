@@ -128,7 +128,7 @@ def copySymlinks(frm, to):
 def ensureGitignore(resultsDir):
     if checkedOutput("git status {} --porcelain".format(resultsDir)).strip():
         with open('.gitignore', 'a') as f:
-            f.write("\n{}".format(resultsDir))
+            f.write("\n/{}".format(resultsDir))
 
 
 def tee(infile, *files):
@@ -268,11 +268,13 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
         safeMake(resultsDir)
         os.chdir(resultsDir)
         checked("git init")
+        os.chdir(curdir)
+
+    if not os.path.exists("{}/.gitignore".format(resultsDir)):
         # If we don't make a file, it looks like results is always ignored even
         # though it isn't.  Luckily, we need a .gitignore anyway
         with open("{}/.gitignore".format(resultsDir), 'w') as f:
-            f.write(".tmp")
-        os.chdir(curdir)
+            f.write("/.tmp\n")
 
     # Now that it's made, make sure it's ignored
     ensureGitignore(resultsBaseRelative)
@@ -432,6 +434,10 @@ def run(programArgs = None):
             "latest" is invalid as well, referring to another unique folder."""))
     args = ap.parse_args(programArgs)
 
+    if not args.message:
+        raise NotImplementedError("You need to use the -m flag to pass a "
+                "message to tie to this tag.")
+
     if args.path:
         # Override dir and tag
         path = args.tag
@@ -508,6 +514,7 @@ def run(programArgs = None):
         checked("git tag -d {}".format(commitTag))
         os.unlink(datedLinkRun)
         safeRollback(os.path.dirname(datedLinkRun))
+        oldLink = os.readlink(latestLinkRun)
         if os.path.abspath(os.path.join(os.path.dirname(latestLinkRun),
                 oldLink)) == os.path.abspath(resultsDirRun):
             os.unlink(latestLinkRun)
