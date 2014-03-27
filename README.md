@@ -9,37 +9,29 @@ Usage
 Simply put git-results somewhere on your PATH.  Then from a git repository, 
 type:
 
-    git results
+    git results -h
 
-It will give you help.  Essentially, you need two more files in the base of your
-repository: git-results-build and git-results-run.  These will not be committed,
+to show the tool's help.
+
+At a bare minimum, you need two files in the base of your repository:
+git-results-build and git-results-run.  These will not be committed,
 and must be executable.  Build and run separation is important because
 git-results automatically detects output files for you, and needs to distinguish
 between files built as part of the build process and files generated at runtime.
 The build step being in git-results is important for repeatability.  Though
-these files aren't committed in your repo, they will go to git-results-message
-in the results folder.
+these files aren't committed in your repo, their contents are archived in the
+git-results-message file in the results folder.
 
 Simplest scenario:
 
-    # == Initial repo setup ==
-    $ mkdir tmp
-    $ cd tmp
     $ git init
-    $ echo "echo 'Hello, world'" > hello_world
-    $ chmod a+x hello_world
-    # Your repo must have at least one commit at the moment
-    $ git add hello_world
-    $ git commit -m "First version"
-
-    # == git-results specifics ==
     $ touch git-results-build
-    $ echo "./hello_world" > git-results-run
+    $ echo "echo 'Hello, world'" > git-results-run
     $ chmod a+x git-results-*
 
-    # -c means it is OK for git results to commit to its own branch.  It will
-    # still make changes to your local tree, but throw an error rather than
-    # commit on its own without -c.
+    ## -c means it is OK for git results to commit to its own branch.  It will
+    ## still make changes to your local tree, but throw an error rather than
+    ## commit on its own without -c.
     $ git results -c test/run -m "Let's see if it prints hello, world"
     Building results/test/run/1 in results/tmp/PP3C3DTC...
     Running results/test/run/1 in results/tmp/PP3C3DTC...

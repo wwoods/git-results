@@ -126,7 +126,8 @@ def copySymlinks(frm, to):
 
 
 def ensureGitignore(resultsDir):
-    if checkedOutput("git status {} --porcelain".format(resultsDir)).strip():
+    if not checkedOutput("git status {} --porcelain --ignored".format(
+            resultsDir)).startswith("!!"):
         with open('.gitignore', 'a') as f:
             f.write("\n/{}".format(resultsDir))
 
@@ -281,12 +282,14 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
 
     # Allow / encourage running same tag several times.  We'll use /1, /2, etc
     n = 1
-    while True:
-        tagDir = os.path.join(resultsBaseRelative, tag + "/{}".format(n))
-        if not any([ os.path.exists(tagDir + s) for s in SUFFIXES ]):
-            break
-        n += 1
+    if os.path.exists(os.path.join(resultsBaseRelative, tag)):
+        for run in os.listdir(os.path.join(resultsBaseRelative, tag)):
+            for s in SUFFIXES:
+                if s and run.endswith(s):
+                    run = run[:-len(s)]
+            n = max(n, int(run) + 1)
     pureTag = tag
+    tagDir = os.path.join(resultsBaseRelative, tag + "/{}".format(n))
     tag = tag + "/{}".format(n)
     gitTag = "{}/{}".format(resultsBaseRelative, tag)
 
@@ -300,26 +303,25 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     if checkedOutput("git status --porcelain").strip():
         # Need to commit, if we can
         if not shouldCommit:
-            raise ValueError("Repository has unsaved changes; use -c to commit "
-                    "automatically.")
+            sys.stderr.write("Repository has unsaved changes; use -c to commit "
+                    "automatically.\n")
+            sys.exit(1)
 
         # Make sure git-results-build and git-results-run are ignored
-        gb = checkedOutput("git status git-results-build --porcelain").strip()
-        if gb and gb.startswith("?"):
+        gb = checkedOutput("git status git-results-build --porcelain --ignored")
+        if gb and not gb.startswith("!!"):
             # Would be added.  Don't do that!
             with open(".gitignore", "a") as f:
-                f.write("\ngit-results-build")
-        gb = checkedOutput("git status git-results-run --porcelain").strip()
-        if gb and gb.startswith("?"):
+                f.write("\n/git-results-build")
+        gb = checkedOutput("git status git-results-run --porcelain --ignored")
+        if gb and not gb.startswith("!!"):
             # Same
             with open(".gitignore", "a") as f:
-                f.write("\ngit-results-run")
+                f.write("\n/git-results-run")
 
         # If this fails, the branch didn't exist or we're already on it, both
         # of which are fine
-        checked("git branch -D git-results", True)
-        checked("git branch --no-track git-results", True)
-        checked("git checkout git-results")
+        checked("git checkout -B git-results")
         checked("git add .")
         checked('git commit -m "{}"'.format(cleanMessage))
 
