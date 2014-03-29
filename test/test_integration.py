@@ -43,12 +43,15 @@ def checkTag(tag):
 class TestGitResults(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls._OLD_STDERR = sys.stderr
+        sys.stderr = sys.stdout
         cls.rootDir = tempfile.mkdtemp()
 
 
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.rootDir)
+        sys.stderr = cls._OLD_STDERR
 
 
     def setUp(self):
@@ -111,11 +114,74 @@ class TestGitResults(unittest.TestCase):
             git_results.run(shlex.split("-c test/run -m 'Imma fail'"))
 
         self.assertEqual(None, checkTag("results/test/run/1"))
-        self.assertEqual(False, os.path.exists("results/test"))
-        self.assertEqual(False, os.path.exists("results/dated"))
-        self.assertEqual(False, os.path.exists("results/latest"))
+        self.assertEqual(False, os.path.lexists("results/test"))
+        self.assertEqual(False, os.path.lexists("results/dated"))
+        self.assertEqual(False, os.path.lexists("results/latest"))
         # Saved due to .gitignore
-        self.assertEqual(True, os.path.exists("results"))
+        self.assertEqual(True, os.path.lexists("results"))
+
+
+    def test_link(self):
+        # Check linking
+        self._setupRepo()
+        git_results.run(shlex.split("-c test/run -m 'Woo'"))
+        git_results.run(shlex.split("link test/run test/run2"))
+        self._assertTagMatchesMessage("results/test/run/1")
+        self._assertTagMatchesMessage("results/test/run2/1")
+        self.assertEqual(checkTag("results/test/run/1"),
+                checkTag("results/test/run2/1"))
+        self.assertEqual("Hello, world\n",
+                open("results/latest/test/run/stdout").read())
+        self.assertEqual("Hello, world\n",
+                open("results/latest/test/run2/stdout").read())
+
+        # Ensure status carry over
+        with open("git-results-run", "w") as f:
+            f.write("wihefiaheifwf")
+
+        with self.assertRaises(SystemExit):
+            git_results.run(shlex.split("-c test/run -m 'Woo'"))
+        git_results.run(shlex.split("link test/run test/run3"))
+        self._assertTagMatchesMessage("results/test/run/2", "-fail")
+        self._assertTagMatchesMessage("results/test/run3/2", "-fail")
+        self.assertEqual("",
+                open("results/latest/test/run3-fail/stdout").read())
+
+
+    def test_move(self):
+        # Check basic move case
+        self._setupRepo()
+        now = datetime.datetime.now()
+        dateBase = os.path.join('results', 'dated', now.strftime('%Y'),
+                now.strftime('%m'), now.strftime('%d'))
+        git_results.run(shlex.split("-c test/run -m 'Woo'"))
+        git_results.run(shlex.split("move test/run test/run2"))
+        self.assertEqual(None, checkTag("results/test/run/1"))
+        self._assertTagMatchesMessage("results/test/run2/1")
+        self.assertEqual(False, os.path.lexists("results/test/run"))
+
+        # Check dated / latest updates
+        print("Testing {}".format(dateBase + "-test/run"))
+        self.assertEqual(False, os.path.lexists(dateBase + '-test/run'))
+        self.assertEqual(True, os.path.lexists(dateBase + '-test/run2'))
+        self.assertEqual(False, os.path.lexists('results/latest/test/run'))
+        self.assertEqual(True, os.path.lexists('results/latest/test/run2'))
+
+        # Should allow running a new experiment at the moved tag
+        git_results.run(shlex.split("-c test/run -m 'Woooo'"))
+        self._assertTagMatchesMessage("results/test/run/1")
+
+
+    def test_moveSingle(self):
+        # Should fail
+        self._setupRepo()
+        git_results.run(shlex.split("-c test/run -m Woo"))
+        with self.assertRaises(ValueError):
+            git_results.run(shlex.split("move test/run/1 test/run2"))
+        with self.assertRaises(ValueError):
+            git_results.run(shlex.split("move test/run test/run2/1"))
+        with self.assertRaises(ValueError):
+            git_results.run(shlex.split("move test/run/1 test/run2/1"))
 
 
     def test_noMessage(self):
@@ -201,7 +267,7 @@ class TestGitResults(unittest.TestCase):
                     open(os.path.join(datedFolder, '{}/stdout'.format(pth))
                         ).read())
             self.assertEqual("", open("results/latest/test/run-fail/stdout").read())
-            self.assertEqual(False, os.path.exists("results/latest/test/run"))
+            self.assertEqual(False, os.path.lexists("results/latest/test/run"))
             err = open('results/test/run/{}/stderr'.format(pth)).read()
             self.assertIn("ezeeeeecho", err.lower())
             self.assertIn("not found", err.lower())
@@ -209,7 +275,7 @@ class TestGitResults(unittest.TestCase):
             self.assertNotIn('hello_world_2', os.listdir('results/test/run/{}'
                     .format(pth)))
         testFail(2)
-        self.assertEqual(False, os.path.exists('results/test/run/2'))
+        self.assertEqual(False, os.path.lexists('results/test/run/2'))
 
         # Ensure that no -c flag works now that we have no changes
         with self.assertRaises(SystemExit):
@@ -224,7 +290,7 @@ class TestGitResults(unittest.TestCase):
         git_results.run(shlex.split("-c test/run -m 'h'"))
         shutil.rmtree("results/test/run/1")
         git_results.run(shlex.split("-c test/run -m 'h'"))
-        self.assertEqual(True, os.path.exists("results/test/run/3"))
+        self.assertEqual(True, os.path.lexists("results/test/run/3"))
 
 
     def test_inPlace(self):

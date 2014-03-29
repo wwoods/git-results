@@ -21,7 +21,7 @@ import traceback
 ABORT_SUFFIX = '-abrt'
 FAIL_SUFFIX = '-fail'
 RUN_SUFFIX = '-run'
-SUFFIXES = [ '', ABORT_SUFFIX, FAIL_SUFFIX, RUN_SUFFIX ]
+SUFFIXES = [ ABORT_SUFFIX, FAIL_SUFFIX, RUN_SUFFIX, '' ]
 
 class FolderState(object):
     """An object that tracks which files exist at init and at another time,
@@ -97,19 +97,11 @@ def checked(cmd, nonZeroOk = False, shell = False):
     cmd = shlex.split(cmd)
     p = subprocess.Popen(cmd, stdout = subprocess.PIPE,
             stderr = subprocess.PIPE, shell = shell)
-    p.communicate()
+    stdout, stderr = p.communicate()
     r = p.poll()
 
     if r != 0 and not nonZeroOk:
         raise Exception("Command '{}' failed with {}".format(cmd, r))
-
-
-def checkedOutput(cmd):
-    """Raises an Exception if cmd fails; returns stdout otherwise."""
-    cmd = shlex.split(cmd)
-    p = subprocess.Popen(cmd, stdout = subprocess.PIPE,
-            stderr = subprocess.PIPE)
-    stdout, stderr = p.communicate()
     return stdout
 
 
@@ -126,7 +118,7 @@ def copySymlinks(frm, to):
 
 
 def ensureGitignore(resultsDir):
-    if not checkedOutput("git status {} --porcelain --ignored".format(
+    if not checked("git status {} --porcelain --ignored".format(
             resultsDir)).startswith("!!"):
         with open('.gitignore', 'a') as f:
             f.write("\n/{}".format(resultsDir))
@@ -180,10 +172,13 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         preBuild = time.time()
 
         print("Building {} in {}".format(commitTag, dirRelative))
+        # stderr redirection benefits nosetests, mainly.
         p = subprocess.Popen(os.path.abspath('./git-results-build'),
-                shell = True)
-        p.communicate()
-        r = p.poll()
+                shell = True, stdout = subprocess.PIPE,
+                stderr = subprocess.STDOUT)
+        thread = tee(p.stdout, sys.stdout)
+        thread.join()
+        r = p.wait()
         if r != 0:
             print("== BUILD FAILED ==")
             sys.exit(1)
@@ -264,14 +259,14 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     """
     resultsBaseRelative = resultsDir
     resultsDir = os.path.abspath(resultsDir)
-    if not os.path.exists(os.path.join(resultsDir, ".git")):
+    if not os.path.lexists(os.path.join(resultsDir, ".git")):
         curdir = os.getcwd()
         safeMake(resultsDir)
         os.chdir(resultsDir)
         checked("git init")
         os.chdir(curdir)
 
-    if not os.path.exists("{}/.gitignore".format(resultsDir)):
+    if not os.path.lexists("{}/.gitignore".format(resultsDir)):
         # If we don't make a file, it looks like results is always ignored even
         # though it isn't.  Luckily, we need a .gitignore anyway
         with open("{}/.gitignore".format(resultsDir), 'w') as f:
@@ -282,7 +277,7 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
 
     # Allow / encourage running same tag several times.  We'll use /1, /2, etc
     n = 1
-    if os.path.exists(os.path.join(resultsBaseRelative, tag)):
+    if os.path.lexists(os.path.join(resultsBaseRelative, tag)):
         for run in os.listdir(os.path.join(resultsBaseRelative, tag)):
             for s in SUFFIXES:
                 if s and run.endswith(s):
@@ -300,7 +295,7 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
                 ).replace("|", "\\|").replace("!", "\\!")
 
     # Check the state of our git repo
-    if checkedOutput("git status --porcelain").strip():
+    if checked("git status --porcelain").strip():
         # Need to commit, if we can
         if not shouldCommit:
             sys.stderr.write("Repository has unsaved changes; use -c to commit "
@@ -308,12 +303,12 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
             sys.exit(1)
 
         # Make sure git-results-build and git-results-run are ignored
-        gb = checkedOutput("git status git-results-build --porcelain --ignored")
+        gb = checked("git status git-results-build --porcelain --ignored")
         if gb and not gb.startswith("!!"):
             # Would be added.  Don't do that!
             with open(".gitignore", "a") as f:
                 f.write("\n/git-results-build")
-        gb = checkedOutput("git status git-results-run --porcelain --ignored")
+        gb = checked("git status git-results-run --porcelain --ignored")
         if gb and not gb.startswith("!!"):
             # Same
             with open(".gitignore", "a") as f:
@@ -325,7 +320,7 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
         checked("git add .")
         checked('git commit -m "{}"'.format(cleanMessage))
 
-    curCommit = checkedOutput("git rev-parse HEAD").strip()
+    curCommit = checked("git rev-parse HEAD").strip()
 
     # Actually make our folder
     tagDirRun = tagDir + RUN_SUFFIX
@@ -341,17 +336,15 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
             RUN_SUFFIX))
     safeMake(os.path.dirname(linkAs))
     parentLevel = 2 + len(tag.split('/'))
-    os.symlink("{}{}{}".format('../' * parentLevel, tag, RUN_SUFFIX),
-            linkAs)
+    os.symlink(os.path.relpath(tagDirRun, os.path.dirname(linkAs)), linkAs)
 
     latestLinkAs = os.path.join(resultsDir, 'latest', pureTag + RUN_SUFFIX)
     safeMake(os.path.dirname(latestLinkAs))
     for s in SUFFIXES:
         linkPath = os.path.join(resultsDir, 'latest', pureTag + s)
-        if os.path.exists(linkPath):
+        if os.path.lexists(linkPath):
             os.unlink(linkPath)
-    os.symlink(
-            "{}{}{}".format('../' * len(pureTag.split('/')), tag, RUN_SUFFIX),
+    os.symlink(os.path.relpath(tagDirRun, os.path.dirname(latestLinkAs)),
             latestLinkAs)
 
     # Add our tag to the git repo
@@ -381,6 +374,14 @@ def checkTag(s):
         raise ValueError("Tag may not start with 'latest'")
     if s.strip('/') != s:
         raise ValueError("Tag may not begin or end with '/'")
+    isInt = False
+    try:
+        int(s.split('/')[-1])
+        isInt = True
+    except ValueError:
+        pass
+    if isInt:
+        raise ValueError("Tag may not end in a number")
     return s
 
 
@@ -396,14 +397,246 @@ def safeRollback(d):
             raise
 
 
+def _processTagArgs(args, pathArg, dirArg, *tagArgs):
+    """Sort out -d and -p args with arbitrary number of tags.  args.dir is
+    populated with a list of directories corresponding with tags, in order.
+
+    Also responsible for default dir of "results"
+    """
+    if getattr(args, pathArg, None) and getattr(args, dirArg, None):
+        raise ArgumentError("-d and -p are incompatible")
+
+    oldDir = (getattr(args, dirArg) or "results").rstrip()
+    newDirs = []
+
+    for tagArg in tagArgs:
+        tag = getattr(args, tagArg)
+        if getattr(args, pathArg):
+            # Override dir and tag values given -p
+            path = tag
+            tag = ""
+            while True:
+                s = os.path.split(path)
+                if s[0]:
+                    if tag:
+                        tag = '/'.join([ s[1], tag ])
+                    else:
+                        tag = s[1]
+                    path = s[0]
+                else:
+                    newDirs.append(s[1])
+                    tag = tag.strip('/')
+                    break
+        else:
+            newDirs.append(oldDir)
+        checkTag(tag)
+        setattr(args, tagArg, tag)
+
+    setattr(args, dirArg, newDirs)
+
+
+def _auditMove(pathFrom, pathTo):
+    """Audits that the given matchingTags can be moved from pathFrom to pathTo
+    without collisions.
+
+    Returns matchingTags
+    """
+    gitTags = [ t.strip() for t in checked(
+            "git tag -l '{0}' '{0}/*'".format(pathFrom)).strip().split('\n') ]
+    matchingTags = []
+    for src in gitTags:
+        if not src.startswith(pathFrom):
+            raise ValueError("Tag {} doesn't start with {}".format(src,
+                    pathFrom))
+        dest = pathTo + src[len(pathFrom):]
+        # Check that the source folder exists, not just the tag in git
+        suffix = None
+        for s in SUFFIXES:
+            if os.path.lexists(src + s):
+                if s == "-run":
+                    sys.stderr.write("Cannot move/link tag that is running: {}"
+                            .format(src))
+                    sys.exit(1)
+                suffix = s
+                break
+
+        if suffix is None:
+            sys.stderr.write("Cannot find data for {}".format(src))
+        matchingTags.append(( src, dest, suffix ))
+
+        # Check that the destination doesn't exist
+        existingForms = []
+        if checked("git tag -l '{}'".format(dest)).strip():
+            existingForms.append("tag")
+        for s in SUFFIXES:
+            if os.path.lexists(dest + s):
+                existingForms.append("filesystem" + s)
+        if existingForms:
+            sys.stderr.write("Destination tag {} exists ({})".format(
+                    dest, ', '.join(existingForms)))
+            sys.exit(1)
+
+    return matchingTags
+
+
+class LatestTracker(object):
+    def __init__(self):
+        """Keeps track of moved stuff, sorts out which should be the new latest
+        link, does the update."""
+        self._entries = {}
+
+
+    def addTagDir(self, srcDir, tagDir, suffix):
+        results, path = tagDir.split('/', 1)
+        tagLatest, tagNumber = (results + '/latest/' + path).rsplit('/', 1)
+
+        results, path = srcDir.split('/', 1)
+        srcLatest, srcNumber = (results + '/latest/' + path).rsplit('/', 1)
+
+        number = int(tagNumber.split('-')[0])
+        if tagLatest in self._entries:
+            if number > self._entries[tagLatest][0]:
+                self._entries[tagLatest] = (number, suffix, tagDir, srcLatest)
+        else:
+            self._entries[tagLatest] = (number, suffix, tagDir, srcLatest)
+
+
+    def commit(self, deleteOldLatest = False):
+        """Make new latest symlinks"""
+        # Update latest; each matchingTag's last part is the trial number, and
+        # we should link the highest
+        for path, (number, suffix, target, srcLatest
+                ) in self._entries.iteritems():
+            os.symlink(os.path.relpath(target, os.path.dirname(path)),
+                    path + suffix)
+            if deleteOldLatest:
+                # srcLatest + suffix must be it, but it may not exist due to 
+                # e.g. old version of code.  Best be safe
+                for s in SUFFIXES:
+                    if os.path.lexists(srcLatest + s):
+                        os.unlink(srcLatest + s)
+
+
+def _runLink(args):
+    ap = argparse.ArgumentParser(description = "Link one or more tagged "
+            "results to a new location (which refers to the original).")
+    ap.add_argument("-p", "--path", action = 'store_true', help = "Same as -p "
+            "for normal git results calls; means that the paths specified "
+            "include the results directory as the first element.  Supercedes "
+            "-d.  Must match for both paths given.")
+    ap.add_argument("-d", "--dir", help = "Directory used to store results.")
+    ap.add_argument("tag_from")
+    ap.add_argument("tag_to")
+    args = ap.parse_args(args)
+    _processTagArgs(args, "path", "dir", "tag_from", "tag_to")
+    pathFrom = '/'.join([ args.dir[0], args.tag_from ])
+    pathTo = '/'.join([ args.dir[1], args.tag_to ])
+
+    matchingTags = _auditMove(pathFrom, pathTo)
+
+    # Do the links
+    latestTracker = LatestTracker()
+    for tagSrc, tagDest, suffix in matchingTags:
+        safeMake(os.path.dirname(tagDest))
+        dirSrc = tagSrc + suffix
+        dirDest = tagDest + suffix
+        os.symlink(os.path.relpath(dirSrc, os.path.dirname(dirDest)), dirDest)
+        tagMsg = checked("git tag -l -n1000 {}".format(tagSrc)).strip()[
+                len(tagSrc):].strip()
+        checked("git tag -a -m '{}' {} {}".format(tagMsg.replace("'", "\'"),
+                tagDest, tagSrc))
+        latestTracker.addTagDir(dirSrc, dirDest, suffix)
+    latestTracker.commit()
+
+
+def _runMove(args):
+    ap = argparse.ArgumentParser(description = "Move one or more tagged "
+            "results to a different tag.")
+    ap.add_argument("-p", "--path", action = 'store_true', help = "Same as -p "
+            "for normal git results calls; means that the paths specified "
+            "include the results directory as the first element.  Supercedes "
+            "-d.  Must match for both paths given.")
+    ap.add_argument("-d", "--dir", help = "Directory used to store results.")
+    ap.add_argument("tag_from")
+    ap.add_argument("tag_to")
+    args = ap.parse_args(args)
+    _processTagArgs(args, "path", "dir", "tag_from", "tag_to")
+    pathFrom = '/'.join([ args.dir[0], args.tag_from ])
+    pathTo = '/'.join([ args.dir[1], args.tag_to ])
+
+    matchingTags = _auditMove(pathFrom, pathTo)
+
+    # tag path : [ Y, M, D ]
+    tagDates = {}
+    def walkDateDir(path, tag, dateInfo):
+        if os.path.islink(path):
+            tagDates[tag] = dateInfo
+        elif os.path.isdir(path):
+            for p in os.listdir(path):
+                walkDateDir(os.path.join(path, p), '/'.join([ tag, p ]),
+                        dateInfo)
+
+    dateBase = os.path.join(args.dir[0], 'dated')
+    for year in os.listdir(dateBase):
+        yearBase = os.path.join(dateBase, year)
+        for month in os.listdir(yearBase):
+            monthBase = os.path.join(yearBase, month)
+            for dayHyphen in os.listdir(monthBase):
+                day, tagStart = dayHyphen.split('-', 1)
+                walkDateDir(os.path.join(monthBase, dayHyphen),
+                        '/'.join([ args.dir[0], tagStart ]),
+                        [ year, month, day ])
+
+    # Everything seems OK, rename it all.  Start with all of the filesystem
+    # changes since we can run git results resync (once implemented) afterwards.
+    latestTracker = LatestTracker()
+    for tagSrc, tagDest, suffix in matchingTags:
+        dirSrc = tagSrc + suffix
+        dirDest = tagDest + suffix
+
+        safeMake(os.path.dirname(dirDest))
+        os.rename(dirSrc, dirDest)
+        safeRollback(os.path.dirname(dirSrc))
+        tagMsg = checked("git tag -l -n1000 {}".format(tagSrc)).strip()[
+                len(tagSrc):].strip()
+        checked("git tag -a -m '{}' {} {}".format(tagMsg.replace("'", "\'"),
+                tagDest, tagSrc))
+        checked("git tag -d {}".format(tagSrc))
+        latestTracker.addTagDir(dirSrc, dirDest, suffix)
+
+        # We have to update any dated links...
+        dateInfo = tagDates.get(tagSrc)
+        if dateInfo:
+            sansResultDir = dirSrc.split('/', 1)[1]
+            oldLink = os.path.join(args.dir[0], 'dated', dateInfo[0],
+                    dateInfo[1], dateInfo[2] + '-' + sansResultDir)
+            os.unlink(oldLink)
+            safeRollback(os.path.dirname(oldLink))
+            targLink = os.path.join(args.dir[1], 'dated', dateInfo[0],
+                    dateInfo[1], dateInfo[2] + '-' + dirDest.split('/', 1)[1])
+            safeMake(os.path.dirname(targLink))
+            os.symlink(os.path.relpath(dirDest, os.path.dirname(targLink)),
+                    targLink)
+    latestTracker.commit(True)
+
+
 def run(programArgs = None):
     if not os.path.isdir('.git'):
         print("Must be used in a git directory!")
         sys.exit(1)
 
+    if programArgs is None:
+        programArgs = sys.argv[1:]
+
+    if programArgs[0] == "move":
+        return _runMove(programArgs[1:])
+    elif programArgs[0] == "link":
+        return _runLink(programArgs[1:])
+
     ap = argparse.ArgumentParser(description = "A git extension for cataloging "
-            "computation results")
-    ap.add_argument("-d", "--dir", default = "results", help = "Directory used "
+            "computation results.  Subcommands available: move, link (e.g. "
+            "git results move -h)")
+    ap.add_argument("-d", "--dir", help = "Directory used "
             "to store results.  Automatically created and set up as a git "
             "repo.  Also automatically added to .gitignore")
     ap.add_argument("-p", "--path", action = 'store_true',
@@ -440,21 +673,10 @@ def run(programArgs = None):
         raise NotImplementedError("You need to use the -m flag to pass a "
                 "message to tie to this tag.")
 
-    if args.path:
-        # Override dir and tag
-        path = args.tag
-        args.tag = ""
-        while True:
-            s = os.path.split(path)
-            if s[0]:
-                args.tag = os.path.join(s[1], args.tag)
-                path = s[0]
-            else:
-                args.dir = s[1]
-                args.tag = args.tag.strip('/')
-                break
-    checkTag(args.tag)
-    args.dir = args.dir.rstrip('/')
+    _processTagArgs(args, "path", "dir", "tag")
+    # _processTagArgs sets args.dir to a list of directories.  For the main
+    # functionality, we only have one dir.
+    args.dir = args.dir[0]
 
     if not os.path.isfile('git-results-build'):
         print(textwrap.dedent("""

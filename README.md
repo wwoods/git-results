@@ -110,9 +110,25 @@ to results/test/run/2.  It's a longer path of course, but it's indexed by date.
 including in progress runs.
 
 
+Moving / Linking results
+------------------------
+If you wish to rename a tag at a later date, you can do so with move:
+
+    $ git results move test/run test/run2
+
+This may not be the wisest idea if you are pushing your results to a remote repository, as git tags are relatively immutable on remote machines.  But, it will work locally anyway.
+
+If you simply wish to link results into a new location, use link:
+
+    $ git results link test/run test/run2
+
+It just uses symlinks, meaning the data will not be copied, but subsequent moves will break the links.
+
+
 Changelog
 ---------
 
+* 2014-3-27 - "move" and "link" commands
 * 2014-3-25 - "latest" special folder to allow access to paths without having
   to tab through the build number.  -run suffix for tests that are in progress.
 * 2014-3-22 - -i --in-place flag for in-place builds.  Not recommended for 
