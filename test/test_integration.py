@@ -90,7 +90,8 @@ class TestGitResults(unittest.TestCase):
         self._remakeAndChdirTmp()
         checked("git init")
         with open("hello_world", "w") as f:
-            f.write("echo 'Hello, world'")
+            f.write("echo 'Hello, world'\n")
+            f.write("echo 'Hello run' > hello_world_run\n")
         addExec("hello_world")
         checked("git add hello_world")
         checked("git commit -m 'First version'")
@@ -308,6 +309,9 @@ class TestGitResults(unittest.TestCase):
         self.assertIn('hello_world_2', os.listdir('.'))
         # But not counted as a result
         self.assertNotIn('hello_world_2', os.listdir('wresults/in/place/1'))
+        # Result file should have been moved instead of copied
+        self.assertIn('hello_world_run', os.listdir('wresults/in/place/1'))
+        self.assertNotIn('hello_world_run', os.listdir('.'))
 
 
     def test_pFlag(self):

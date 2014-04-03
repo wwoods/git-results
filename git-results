@@ -28,6 +28,9 @@ class FolderState(object):
     and can copy changes to another folder."""
 
     def __init__(self, dir, resultsDir):
+        """If dir is None, then this is an in-place operation, and we should
+        move (rather than copy) the results."""
+        self._inPlace = (dir is None)
         self._dir = dir or os.path.abspath('.')
         self._resultsDirRel = os.path.relpath(resultsDir, self._dir)
         if not self._resultsDirRel.startswith(".."):
@@ -35,7 +38,7 @@ class FolderState(object):
                 rdr = os.path.split(self._resultsDirRel)[0]
                 if not rdr:
                     break
-                self._resultsDirRel = rdr[0]
+                self._resultsDirRel = rdr
         self._files = set()
         self._scan(self._dir)
 
@@ -61,7 +64,10 @@ class FolderState(object):
                 target = os.path.relpath(c, prefix)
             target = os.path.join(dir, target)
             safeMake(os.path.dirname(target))
-            shutil.copy2(c, target)
+            if not self._inPlace:
+                shutil.copy2(c, target)
+            else:
+                os.rename(c, target)
 
 
     def _isBanned(self, path):
