@@ -143,8 +143,4 @@ Changelog
 TODO
 ----
 
-* Need a move command for reorganizing
-
-* Need a clean command to delete an exact tag an any children of it, also
-  cleaning up the git repository, so that a tag can be reused.
-"""
+* Woohoo!  Nada
