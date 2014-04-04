@@ -576,6 +576,9 @@ def _runMove(args):
     tagDates = {}
     def walkDateDir(path, tag, dateInfo):
         if os.path.islink(path):
+            # Strip off the fail / success / whatever status
+            if '-' in tag.rsplit('/', 1)[1]:
+                tag = tag.rsplit('-', 1)[0]
             tagDates[tag] = dateInfo
         elif os.path.isdir(path):
             for p in os.listdir(path):

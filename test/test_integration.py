@@ -74,6 +74,12 @@ class TestGitResults(unittest.TestCase):
         self.assertEqual(commit, checkTag(tag))
 
 
+    def _getDatedBase(self):
+        now = datetime.datetime.now()
+        return os.path.join('results', 'dated', now.strftime('%Y'),
+                now.strftime('%m'), now.strftime('%d'))
+
+
     def _remakeAndChdirTmp(self):
         try:
             shutil.rmtree("tmp")
@@ -152,9 +158,7 @@ class TestGitResults(unittest.TestCase):
     def test_move(self):
         # Check basic move case
         self._setupRepo()
-        now = datetime.datetime.now()
-        dateBase = os.path.join('results', 'dated', now.strftime('%Y'),
-                now.strftime('%m'), now.strftime('%d'))
+        dateBase = self._getDatedBase()
         git_results.run(shlex.split("-c test/run -m 'Woo'"))
         git_results.run(shlex.split("move test/run test/run2"))
         self.assertEqual(None, checkTag("results/test/run/1"))
@@ -173,8 +177,26 @@ class TestGitResults(unittest.TestCase):
         self._assertTagMatchesMessage("results/test/run/1")
 
 
+    def test_moveFail(self):
+        # Ensure dated-fail moves
+        self._setupRepo()
+        with open('git-results-run', 'w') as f:
+            f.write("hiwehfiahef")
+        dateBase = self._getDatedBase()
+        with self.assertRaises(SystemExit):
+            git_results.run(shlex.split("-c test/run -m 'woo'"))
+        try:
+            git_results.run(shlex.split("move test/run test/run2"))
+        except SystemExit, e:
+            self.fail(str(e))
+        self.assertEqual(False, os.path.lexists("results/test/run"))
+        self.assertEqual(False, os.path.lexists(dateBase + "-test/run"))
+        self.assertEqual(True, os.path.lexists(dateBase + "-test/run2"))
+        self.assertEqual("", open(dateBase + "-test/run2/1-fail/stdout").read())
+
+
     def test_moveSingle(self):
-        # Should fail
+        # Should fail to move an instance of a tag
         self._setupRepo()
         git_results.run(shlex.split("-c test/run -m Woo"))
         with self.assertRaises(ValueError):
