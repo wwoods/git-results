@@ -513,6 +513,7 @@ class LatestTracker(object):
         # we should link the highest
         for path, (number, suffix, target, srcLatest
                 ) in self._entries.iteritems():
+            safeMake(os.path.dirname(path + suffix))
             os.symlink(os.path.relpath(target, os.path.dirname(path)),
                     path + suffix)
             if deleteOldLatest:
@@ -543,9 +544,9 @@ def _runLink(args):
     # Do the links
     latestTracker = LatestTracker()
     for tagSrc, tagDest, suffix in matchingTags:
-        safeMake(os.path.dirname(tagDest))
         dirSrc = tagSrc + suffix
         dirDest = tagDest + suffix
+        safeMake(os.path.dirname(dirDest))
         os.symlink(os.path.relpath(dirSrc, os.path.dirname(dirDest)), dirDest)
         tagMsg = checked("git tag -l -n1000 {}".format(tagSrc)).strip()[
                 len(tagSrc):].strip()

@@ -160,17 +160,18 @@ class TestGitResults(unittest.TestCase):
         self._setupRepo()
         dateBase = self._getDatedBase()
         git_results.run(shlex.split("-c test/run -m 'Woo'"))
-        git_results.run(shlex.split("move test/run test/run2"))
+        git_results.run(shlex.split("move test/run test/trash/run2"))
         self.assertEqual(None, checkTag("results/test/run/1"))
-        self._assertTagMatchesMessage("results/test/run2/1")
+        self._assertTagMatchesMessage("results/test/trash/run2/1")
         self.assertEqual(False, os.path.lexists("results/test/run"))
 
         # Check dated / latest updates
         print("Testing {}".format(dateBase + "-test/run"))
         self.assertEqual(False, os.path.lexists(dateBase + '-test/run'))
-        self.assertEqual(True, os.path.lexists(dateBase + '-test/run2'))
+        self.assertEqual(True, os.path.lexists(dateBase + '-test/trash/run2'))
         self.assertEqual(False, os.path.lexists('results/latest/test/run'))
-        self.assertEqual(True, os.path.lexists('results/latest/test/run2'))
+        self.assertEqual(True,
+                os.path.lexists('results/latest/test/trash/run2'))
 
         # Should allow running a new experiment at the moved tag
         git_results.run(shlex.split("-c test/run -m 'Woooo'"))
