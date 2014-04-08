@@ -1,4 +1,4 @@
-#! /usr/bin/python2
+#! /usr/bin/env python2
 
 """Created by Walt Woods, 2014"""
 
@@ -107,7 +107,7 @@ def checked(cmd, nonZeroOk = False, shell = False):
     r = p.poll()
 
     if r != 0 and not nonZeroOk:
-        raise Exception("Command '{}' failed with {}".format(cmd, r))
+        raise Exception("Command '{0}' failed with {1}".format(cmd, r))
     return stdout
 
 
@@ -124,10 +124,10 @@ def copySymlinks(frm, to):
 
 
 def ensureGitignore(resultsDir):
-    if not checked("git status {} --porcelain --ignored".format(
+    if not checked("git status {0} --porcelain --ignored".format(
             resultsDir)).startswith("!!"):
         with open('.gitignore', 'a') as f:
-            f.write("\n/{}".format(resultsDir))
+            f.write("\n/{0}".format(resultsDir))
 
 
 def tee(infile, *files):
@@ -167,8 +167,8 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         if dir is not None:
             os.chdir(dir)
             checked('git init')
-            checked('git remote add origin file://{}'.format(odir))
-            checked('git fetch origin {}'.format(commitTag))
+            checked('git remote add origin file://{0}'.format(odir))
+            checked('git fetch origin {0}'.format(commitTag))
             checked('git reset --hard FETCH_HEAD')
             copySymlinks(odir, dir)
             for grFile in [ "git-results-build", "git-results-run" ]:
@@ -177,7 +177,7 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
 
         preBuild = time.time()
 
-        print("Building {} in {}".format(commitTag, dirRelative))
+        print("Building {0} in {1}".format(commitTag, dirRelative))
         # stderr redirection benefits nosetests, mainly.
         p = subprocess.Popen(os.path.abspath('./git-results-build'),
                 shell = True, stdout = subprocess.PIPE,
@@ -194,7 +194,7 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         # common path too...
         fs = FolderState(dir, resultsDir)
 
-        print("Running {} in {}".format(commitTag, dirRelative))
+        print("Running {0} in {1}".format(commitTag, dirRelative))
         print("=" * 79)
         print("=" * 79)
         preRun = time.time()
@@ -204,8 +204,8 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         try:
             # Special handling for our runner script
             line_buffered = 1
-            output = open('{}/stdout'.format(resultsDir), 'w', line_buffered)
-            error = open('{}/stderr'.format(resultsDir), 'w', line_buffered)
+            output = open('{0}/stdout'.format(resultsDir), 'w', line_buffered)
+            error = open('{0}/stderr'.format(resultsDir), 'w', line_buffered)
             p = subprocess.Popen(os.path.abspath('./git-results-run'), shell = True,
                     stdout = subprocess.PIPE, stderr = subprocess.PIPE)
             threads = [ tee(p.stdout, output, sys.stdout),
@@ -224,23 +224,23 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         print("=" * 79)
 
         # If we reach here, everything ran OK, so copy files
-        print("Copying results to {}".format(resultsDirRelative))
+        print("Copying results to {0}".format(resultsDirRelative))
         fs.copyResultsTo(resultsDir, trimCommonPaths)
 
         allDone = time.time()
         with open(os.path.join(resultsDir, 'git-results-message'), 'a') as f:
             f.write("\n\n")
-            f.write("{} after {}s\n".format("OK" if r == 0 else "FAIL",
+            f.write("{0} after {1}s\n".format("OK" if r == 0 else "FAIL",
                     allDone - preRun))
-            f.write("Build took {}s\n".format(preRun - preBuild))
+            f.write("Build took {0}s\n".format(preRun - preBuild))
 
         if r != 0:
             error.write(("\n\ngit-results detected abnormal program "
-                    "termination: {}\n").format(r))
-            print("Non-zero exit status after {}: {}".format(allDone - preRun,
+                    "termination: {0}\n").format(r))
+            print("Non-zero exit status after {0}: {1}".format(allDone - preRun,
                     r))
         else:
-            print("OK after {}".format(allDone - preRun))
+            print("OK after {0}".format(allDone - preRun))
         return r, didAbort
     finally:
         os.chdir(odir)
@@ -272,10 +272,10 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
         checked("git init")
         os.chdir(curdir)
 
-    if not os.path.lexists("{}/.gitignore".format(resultsDir)):
+    if not os.path.lexists("{0}/.gitignore".format(resultsDir)):
         # If we don't make a file, it looks like results is always ignored even
         # though it isn't.  Luckily, we need a .gitignore anyway
-        with open("{}/.gitignore".format(resultsDir), 'w') as f:
+        with open("{0}/.gitignore".format(resultsDir), 'w') as f:
             f.write("/.tmp\n")
 
     # Now that it's made, make sure it's ignored
@@ -290,9 +290,9 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
                     run = run[:-len(s)]
             n = max(n, int(run) + 1)
     pureTag = tag
-    tagDir = os.path.join(resultsBaseRelative, tag + "/{}".format(n))
-    tag = tag + "/{}".format(n)
-    gitTag = "{}/{}".format(resultsBaseRelative, tag)
+    tagDir = os.path.join(resultsBaseRelative, tag + "/{0}".format(n))
+    tag = tag + "/{0}".format(n)
+    gitTag = "{0}/{1}".format(resultsBaseRelative, tag)
 
     if not message:
         cleanMessage = gitTag
@@ -323,8 +323,8 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
         # If this fails, the branch didn't exist or we're already on it, both
         # of which are fine
         checked("git checkout -B git-results")
-        checked("git add .")
-        checked('git commit -m "{}"'.format(cleanMessage))
+        checked("git add -A .")
+        checked('git commit -m "{0}"'.format(cleanMessage))
 
     curCommit = checked("git rev-parse HEAD").strip()
 
@@ -338,7 +338,7 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
             now.strftime("%m"))
     safeMake(dated)
 
-    linkAs = os.path.join(dated, "{}-{}{}".format(now.strftime("%d"), tag,
+    linkAs = os.path.join(dated, "{0}-{1}{2}".format(now.strftime("%d"), tag,
             RUN_SUFFIX))
     safeMake(os.path.dirname(linkAs))
     parentLevel = 2 + len(tag.split('/'))
@@ -354,14 +354,14 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
             latestLinkAs)
 
     # Add our tag to the git repo
-    checked('git tag -a -m "{}" {}'.format(cleanMessage, gitTag))
+    checked('git tag -a -m "{0}" {1}'.format(cleanMessage, gitTag))
 
     # Write our message file
     with open(os.path.join(tagDirRun, "git-results-message"), "w") as f:
-        f.write("{}\n{}\n".format(gitTag, "=" * min(79, len(gitTag))))
+        f.write("{0}\n{1}\n".format(gitTag, "=" * min(79, len(gitTag))))
         if message:
-            f.write("{}\n".format(message))
-        f.write("\nCommit: {}".format(curCommit))
+            f.write("{0}\n".format(message))
+        f.write("\nCommit: {0}".format(curCommit))
         f.write("\n\ngit-results-run\n---------------\n")
         f.write(open('git-results-run').read())
         f.write("\n\ngit-results-build\n-----------------\n")
@@ -452,7 +452,7 @@ def _auditMove(pathFrom, pathTo):
     matchingTags = []
     for src in gitTags:
         if not src.startswith(pathFrom):
-            raise ValueError("Tag {} doesn't start with {}".format(src,
+            raise ValueError("Tag {0} doesn't start with {1}".format(src,
                     pathFrom))
         dest = pathTo + src[len(pathFrom):]
         # Check that the source folder exists, not just the tag in git
@@ -460,25 +460,25 @@ def _auditMove(pathFrom, pathTo):
         for s in SUFFIXES:
             if os.path.lexists(src + s):
                 if s == "-run":
-                    sys.stderr.write("Cannot move/link tag that is running: {}"
+                    sys.stderr.write("Cannot move/link tag that is running: {0}"
                             .format(src))
                     sys.exit(1)
                 suffix = s
                 break
 
         if suffix is None:
-            sys.stderr.write("Cannot find data for {}".format(src))
+            sys.stderr.write("Cannot find data for {0}".format(src))
         matchingTags.append(( src, dest, suffix ))
 
         # Check that the destination doesn't exist
         existingForms = []
-        if checked("git tag -l '{}'".format(dest)).strip():
+        if checked("git tag -l '{0}'".format(dest)).strip():
             existingForms.append("tag")
         for s in SUFFIXES:
             if os.path.lexists(dest + s):
                 existingForms.append("filesystem" + s)
         if existingForms:
-            sys.stderr.write("Destination tag {} exists ({})".format(
+            sys.stderr.write("Destination tag {0} exists ({1})".format(
                     dest, ', '.join(existingForms)))
             sys.exit(1)
 
@@ -548,9 +548,9 @@ def _runLink(args):
         dirDest = tagDest + suffix
         safeMake(os.path.dirname(dirDest))
         os.symlink(os.path.relpath(dirSrc, os.path.dirname(dirDest)), dirDest)
-        tagMsg = checked("git tag -l -n1000 {}".format(tagSrc)).strip()[
+        tagMsg = checked("git tag -l -n1000 {0}".format(tagSrc)).strip()[
                 len(tagSrc):].strip()
-        checked("git tag -a -m '{}' {} {}".format(tagMsg.replace("'", "\'"),
+        checked("git tag -a -m '{0}' {1} {2}".format(tagMsg.replace("'", "\'"),
                 tagDest, tagSrc))
         latestTracker.addTagDir(dirSrc, dirDest, suffix)
     latestTracker.commit()
@@ -607,11 +607,11 @@ def _runMove(args):
         safeMake(os.path.dirname(dirDest))
         os.rename(dirSrc, dirDest)
         safeRollback(os.path.dirname(dirSrc))
-        tagMsg = checked("git tag -l -n1000 {}".format(tagSrc)).strip()[
+        tagMsg = checked("git tag -l -n1000 {0}".format(tagSrc)).strip()[
                 len(tagSrc):].strip()
-        checked("git tag -a -m '{}' {} {}".format(tagMsg.replace("'", "\'"),
+        checked("git tag -a -m '{0}' {1} {2}".format(tagMsg.replace("'", "\'"),
                 tagDest, tagSrc))
-        checked("git tag -d {}".format(tagSrc))
+        checked("git tag -d {0}".format(tagSrc))
         latestTracker.addTagDir(dirSrc, dirDest, suffix)
 
         # We have to update any dated links...
@@ -744,8 +744,8 @@ def run(programArgs = None):
     except:
         # Roll back our tag and results folders...
         traceback.print_exc()
-        print("Deleting {} and associated tags / links".format(resultsDirRun))
-        checked("git tag -d {}".format(commitTag))
+        print("Deleting {0} and associated tags / links".format(resultsDirRun))
+        checked("git tag -d {0}".format(commitTag))
         os.unlink(datedLinkRun)
         safeRollback(os.path.dirname(datedLinkRun))
         oldLink = os.readlink(latestLinkRun)
@@ -767,7 +767,7 @@ def run(programArgs = None):
         if runFailed == "abort":
             newSuffix = ABORT_SUFFIX
 
-    print("Moving {} to {}".format(resultsDirRun, resultsDir + newSuffix))
+    print("Moving {0} to {1}".format(resultsDirRun, resultsDir + newSuffix))
     os.rename(resultsDirRun, resultsDir + newSuffix)
 
     oldLink = os.readlink(datedLinkRun)

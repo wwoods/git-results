@@ -128,6 +128,8 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2014-4-7 - Minor fix for "move" and Python 2.6 support (must install argparse of course).
+  -A to auto add removed files.
 * 2014-3-27 - "move" and "link" commands
 * 2014-3-25 - "latest" special folder to allow access to paths without having
   to tab through the build number.  -run suffix for tests that are in progress.
