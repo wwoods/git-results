@@ -145,4 +145,5 @@ Changelog
 TODO
 ----
 
-* Woohoo!  Nada
+* -i should create a temporary file; git-results should never execute a new
+  test / commit if this file exists.

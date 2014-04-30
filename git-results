@@ -285,10 +285,14 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     n = 1
     if os.path.lexists(os.path.join(resultsBaseRelative, tag)):
         for run in os.listdir(os.path.join(resultsBaseRelative, tag)):
-            for s in SUFFIXES:
-                if s and run.endswith(s):
-                    run = run[:-len(s)]
-            n = max(n, int(run) + 1)
+            # Remove any suffixes
+            run = run.split('-', 1)[0]
+            try:
+                n = max(n, int(run) + 1)
+            except ValueError:
+                # Not an integer, probably a file someone bundled in with the
+                # results.
+                pass
     pureTag = tag
     tagDir = os.path.join(resultsBaseRelative, tag + "/{0}".format(n))
     tag = tag + "/{0}".format(n)
@@ -366,14 +370,15 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
         f.write(open('git-results-run').read())
         f.write("\n\ngit-results-build\n-----------------\n")
         f.write(open('git-results-build').read())
+        f.write("\n\nStarted {0}".format(now.strftime("%Y-%m-%dT%H:%M:%S")))
 
     return tagDirRun, linkAs, latestLinkAs, gitTag
 
 
 def checkTag(s):
     """Takes a string s and returns it, if it is a tag."""
-    if re.search("^[a-zA-Z0-9_/-]+$", s) is None:
-        raise ValueError("Tag must match regex [a-zA-Z0-9_-/]+")
+    if re.search("^[a-zA-Z0-9_/\.-]+$", s) is None:
+        raise ValueError("Tag must match regex [a-zA-Z0-9_/\.-]+")
     if s.startswith('dated'):
         raise ValueError("Tag may not start with 'dated'")
     if s.startswith('latest'):
