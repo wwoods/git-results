@@ -209,12 +209,38 @@ class TestGitResults(unittest.TestCase):
 
 
     def test_noMessage(self):
-        # Ensure it does not work without a message...
+        # Ensure it does not work without a message, and that only valid
+        # messages are accepted.
         self._setupRepo()
 
         try:
-            with self.assertRaises(NotImplementedError):
+            try:
+                # Replace editor with bunk editor
+                os.environ['EDITOR'] = 'ls > /dev/null'
                 git_results.run(shlex.split("-c test/run"))
+            except ValueError, e:
+                self.assertEqual("Commit message must be at least 5 "
+                        "characters; got: 'Please replace with a commit "
+                        "message to continue'", str(e))
+
+            try:
+                os.environ['EDITOR'] = 'echo "Comm" >'
+                git_results.run(shlex.split("-c test/run"))
+            except ValueError, e:
+                self.assertEqual("Commit message must be at least 5 "
+                        "characters; got: 'Comm'", str(e))
+
+            os.environ['EDITOR'] = 'echo "Commt" >'
+            git_results.run(shlex.split("-c test/run"))
+            self.assertEqual("Hello, world\n",
+                    open("results/test/run/1/stdout").read())
+
+            # If no commit is required, it should not need to prompt for a
+            # message.
+            os.environ['EDITOR'] = 'echo'
+            git_results.run(shlex.split("-c test/run2"))
+            self.assertEqual("Hello, world\n",
+                    open("results/test/run2/1/stdout").read())
         except SystemExit, e:
             self.fail(str(e))
 

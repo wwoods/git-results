@@ -13,6 +13,10 @@ import shlex
 import shutil
 import subprocess
 import sys
+# Note on tempfile - only used for configuration, not for any execution.  This
+# is so that if any of the git-results-* scripts invoke network file system
+# activity, those files are accessible to all nodes with access to the NFS.
+import tempfile
 import textwrap
 import threading
 import time
@@ -106,8 +110,12 @@ def checked(cmd, nonZeroOk = False, shell = False):
     stdout, stderr = p.communicate()
     r = p.poll()
 
-    if r != 0 and not nonZeroOk:
-        raise Exception("Command '{0}' failed with {1}".format(cmd, r))
+    if r != 0:
+        if (isinstance(nonZeroOk, (list, tuple)) and r in nonZeroOk
+                or nonZeroOk == True):
+            pass
+        else:
+            raise Exception("Command '{0}' failed with {1}".format(cmd, r))
     return stdout
 
 
@@ -260,6 +268,10 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     """Sets up the experiment skeleton and commits the git repo to an acceptable
     state.
 
+    If message is unspecified AND a commit is occurring, will prompt for a
+    suitable message.  Otherwise, the tag number (including run number) will
+    be used.
+
     Returns the directory for results (absolute path), dated symlink path (for
     rollback / updated), latest symlink path, and the commit tag to run.
     """
@@ -301,8 +313,7 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     if not message:
         cleanMessage = gitTag
     else:
-        cleanMessage = message.replace('"', '\\"').replace("&", "\\&"
-                ).replace("|", "\\|").replace("!", "\\!")
+        cleanMessage = _escapeString(message)
 
     # Check the state of our git repo
     if checked("git status --porcelain").strip():
@@ -311,6 +322,15 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
             sys.stderr.write("Repository has unsaved changes; use -c to commit "
                     "automatically.\n")
             sys.exit(1)
+
+        # Ensure that we have a message if we're doing a commit
+        if not message:
+            message = _getStringViaEditor("Please replace with a commit "
+                    "message to continue")
+            if len(message) < 5 or message.startswith("Please replace"):
+                raise ValueError("Commit message must be at least 5 "
+                        "characters; got: '" + message + "'")
+            cleanMessage = _escapeString(message)
 
         # Make sure git-results-build and git-results-run are ignored
         gb = checked("git status git-results-build --porcelain --ignored")
@@ -406,6 +426,38 @@ def safeRollback(d):
         # Directory not empty
         if e.errno != 39:
             raise
+
+
+def _escapeString(st):
+    """Returns st escaped so it can be used as a string within the shell"""
+    return st.replace('"', '\\"').replace("&", "\\&"
+            ).replace("|", "\\|").replace("!", "\\!")
+
+
+def _getStringViaEditor(contents = ""):
+    """Gets a string by popping up an editor in the CLI; optionally presents
+    a reason."""
+    baseEditor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+    # Note that git config returns 1 if key not found
+    gitEditor = checked("git config --get core.editor", nonZeroOk = [ 1 ]
+            ).strip()
+    editor = gitEditor or baseEditor
+
+    (fd, name) = tempfile.mkstemp(prefix="git-results-", suffix=".txt",
+            text = True)
+    try:
+        f = os.fdopen(fd, "wt")
+        f.write(contents)
+        f.close()
+
+        r = os.system('{} "{}"'.format(editor, name))
+        if r != 0 and r != 1:
+            raise Exception('Editor failed: {} "{}"'.format(editor, name))
+
+        with open(name) as f:
+            return f.read().strip()
+    finally:
+        os.unlink(name)
 
 
 def _processTagArgs(args, pathArg, dirArg, *tagArgs):
@@ -522,7 +574,7 @@ class LatestTracker(object):
             os.symlink(os.path.relpath(target, os.path.dirname(path)),
                     path + suffix)
             if deleteOldLatest:
-                # srcLatest + suffix must be it, but it may not exist due to 
+                # srcLatest + suffix must be it, but it may not exist due to
                 # e.g. old version of code.  Best be safe
                 for s in SUFFIXES:
                     if os.path.lexists(srcLatest + s):
@@ -683,10 +735,6 @@ def run(programArgs = None):
             a unique folder created by git-results to help with indexing results by date.
             "latest" is invalid as well, referring to another unique folder."""))
     args = ap.parse_args(programArgs)
-
-    if not args.message:
-        raise NotImplementedError("You need to use the -m flag to pass a "
-                "message to tie to this tag.")
 
     _processTagArgs(args, "path", "dir", "tag")
     # _processTagArgs sets args.dir to a list of directories.  For the main

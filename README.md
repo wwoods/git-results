@@ -6,7 +6,7 @@ A helper script / git extension for cataloging computation results
 Usage
 -----
 
-Simply put git-results somewhere on your PATH.  Then from a git repository, 
+Simply put git-results somewhere on your PATH.  Then from a git repository,
 type:
 
     git results -h
@@ -128,12 +128,14 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2014-6-25 - -m flag is optional; if a commit is made, then a commit message
+  is prompted
 * 2014-4-7 - Minor fix for "move" and Python 2.6 support (must install argparse of course).
   -A to auto add removed files.
 * 2014-3-27 - "move" and "link" commands
 * 2014-3-25 - "latest" special folder to allow access to paths without having
   to tab through the build number.  -run suffix for tests that are in progress.
-* 2014-3-22 - -i --in-place flag for in-place builds.  Not recommended for 
+* 2014-3-22 - -i --in-place flag for in-place builds.  Not recommended for
   anything other than getting a build working or experiments with very short
   runtimes.
 * 2014-3-21 - Print time it took to run in last message, flushes stdout and
