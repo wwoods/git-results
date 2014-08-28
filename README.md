@@ -129,7 +129,8 @@ Changelog
 ---------
 
 * 2014-8-28 - -f flag for a follow-up shell command to be run in the completed
-  folder on success
+  folder on success.  Try to delete experiment folder for up to 10 seconds if
+  files are still being written.
 * 2014-6-25 - -m flag is optional; if a commit is made, then a commit message
   is prompted
 * 2014-4-7 - Minor fix for "move" and Python 2.6 support (must install argparse of course).
@@ -149,6 +150,8 @@ Changelog
 TODO
 ----
 
+* -r(estartable) flag to indicate max transient failure time; if run and a -run
+  exists, it will restart an existing experiment after a warning raw_input().
 * -i should create a temporary file; git-results should never execute a new
   test / commit if this file exists.
 * -run tags should be cleaned up by subsequent runs if they have been terminated

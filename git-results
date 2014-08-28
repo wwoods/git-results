@@ -800,7 +800,23 @@ def run(programArgs = None):
                     runFailed = "abort"
         finally:
             if expDir is not None:
-                shutil.rmtree(expDir)
+                s = time.time()
+                failing = True
+                while time.time() - s < 10.0:
+                    # Wait up to 10 seconds for the program to stop adding files
+                    # to the experiment folder (child processes)
+                    try:
+                        shutil.rmtree(expDir)
+                        failing = False
+                        break
+                    except OSError, e:
+                        # Directory not empty
+                        if e.errno != 39:
+                            raise
+                        print("Files still being written...")
+                        time.sleep(1.0)
+                if failing:
+                    print("Could not remove {}".format(expDir))
                 safeRollback(os.path.dirname(expDir))
     except:
         # Roll back our tag and results folders...
