@@ -128,6 +128,8 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2014-8-28 - -f flag for a follow-up shell command to be run in the completed
+  folder on success
 * 2014-6-25 - -m flag is optional; if a commit is made, then a commit message
   is prompted
 * 2014-4-7 - Minor fix for "move" and Python 2.6 support (must install argparse of course).
@@ -149,3 +151,6 @@ TODO
 
 * -i should create a temporary file; git-results should never execute a new
   test / commit if this file exists.
+* -run tags should be cleaned up by subsequent runs if they have been terminated
+    * Might want to just say if there's been no output for a day, drop it?
+    * Can we actually detect a dead process that we have no relation to?  I forget.

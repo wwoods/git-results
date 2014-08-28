@@ -43,6 +43,7 @@ def checkTag(tag):
 class TestGitResults(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        git_results.IS_TEST = True
         cls._OLD_STDERR = sys.stderr
         sys.stderr = sys.stdout
         cls.rootDir = tempfile.mkdtemp()
@@ -52,6 +53,7 @@ class TestGitResults(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.rootDir)
         sys.stderr = cls._OLD_STDERR
+        git_results.IS_TEST = False
 
 
     def setUp(self):
@@ -126,6 +128,19 @@ class TestGitResults(unittest.TestCase):
         self.assertEqual(False, os.path.lexists("results/latest"))
         # Saved due to .gitignore
         self.assertEqual(True, os.path.lexists("results"))
+
+
+    def test_followCmd(self):
+        # Ensure that the -f / --follow-cmd works
+        self._setupRepo()
+        git_results.run(shlex.split("-c test/run -m 'Woo' -f 'echo yo>follow'"))
+        self.assertEqual("yo\n", open('results/test/run/1/follow').read())
+        with open('git-results-run', 'w') as f:
+            f.write("heihaiwehfiaowhefoi")
+        with self.assertRaises(SystemExit):
+            git_results.run(shlex.split(
+                    "-c test/run -m 'Woo' -f 'echo yo>follow'"))
+        self.assertEqual(False, os.path.lexists("results/test/run/2/follow"))
 
 
     def test_link(self):
@@ -220,8 +235,7 @@ class TestGitResults(unittest.TestCase):
                 git_results.run(shlex.split("-c test/run"))
             except ValueError, e:
                 self.assertEqual("Commit message must be at least 5 "
-                        "characters; got: 'Please replace with a commit "
-                        "message to continue'", str(e))
+                        "characters; got: ''", str(e))
 
             try:
                 os.environ['EDITOR'] = 'echo "Comm" >'

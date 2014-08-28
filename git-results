@@ -26,6 +26,8 @@ ABORT_SUFFIX = '-abrt'
 FAIL_SUFFIX = '-fail'
 RUN_SUFFIX = '-run'
 SUFFIXES = [ ABORT_SUFFIX, FAIL_SUFFIX, RUN_SUFFIX, '' ]
+# Overridden by tests to suppress raw_input
+IS_TEST = False
 
 class FolderState(object):
     """An object that tracks which files exist at init and at another time,
@@ -325,8 +327,7 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
 
         # Ensure that we have a message if we're doing a commit
         if not message:
-            message = _getStringViaEditor("Please replace with a commit "
-                    "message to continue")
+            message = _getStringViaEditor("git-results needs a commit message")
             if len(message) < 5 or message.startswith("Please replace"):
                 raise ValueError("Commit message must be at least 5 "
                         "characters; got: '" + message + "'")
@@ -434,7 +435,7 @@ def _escapeString(st):
             ).replace("|", "\\|").replace("!", "\\!")
 
 
-def _getStringViaEditor(contents = ""):
+def _getStringViaEditor(prompt = ""):
     """Gets a string by popping up an editor in the CLI; optionally presents
     a reason."""
     baseEditor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
@@ -447,8 +448,11 @@ def _getStringViaEditor(contents = ""):
             text = True)
     try:
         f = os.fdopen(fd, "wt")
-        f.write(contents)
+        # f.write(contents)
         f.close()
+
+        if prompt and not IS_TEST:
+            raw_input(prompt + ".  Press enter to continue.")
 
         r = os.system('{} "{}"'.format(editor, name))
         if r != 0 and r != 1:
@@ -727,6 +731,10 @@ def run(programArgs = None):
     ap.add_argument("-m", "--message", help = "Commit message / "
             "git-results-message content paired with results.  If unspecified, "
             "we'll pop open an editor for you (like git commit)")
+    ap.add_argument("-f", "--follow-cmd", help = "Shell command to run in the "
+            "results directory on successful completion.  Useful for e.g. "
+            "opening generated images when you don't want to put this in "
+            "git-results-run")
     ap.add_argument("tag", help = textwrap.dedent("""
             Path to organize these results under.  For instance, giving a tag of parity/squids
             will create a git tag for the commit as results/parity/squids, and will create the
@@ -819,9 +827,10 @@ def run(programArgs = None):
         newSuffix = FAIL_SUFFIX
         if runFailed == "abort":
             newSuffix = ABORT_SUFFIX
+    resultsDirNew = resultsDir + newSuffix
 
-    print("Moving {0} to {1}".format(resultsDirRun, resultsDir + newSuffix))
-    os.rename(resultsDirRun, resultsDir + newSuffix)
+    print("Moving {0} to {1}".format(resultsDirRun, resultsDirNew))
+    os.rename(resultsDirRun, resultsDirNew)
 
     oldLink = os.readlink(datedLinkRun)
     os.unlink(datedLinkRun)
@@ -837,6 +846,12 @@ def run(programArgs = None):
 
     if runFailed:
         sys.exit(1)
+    elif args.follow_cmd:
+        r = subprocess.Popen(args.follow_cmd, shell = True,
+                cwd = resultsDirNew).wait()
+        if r != 0:
+            raise Exception("--follow-cmd '{}' failed with non-zero return: {}"
+                    .format(args.follow_cmd, r))
 
 
 if __name__ == '__main__':
