@@ -128,6 +128,8 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2014-9-23 - Added INDEX file at root of all experiment directories to help
+  distinguish between different runs at a glance.  Message is required.
 * 2014-8-28 - -f flag for a follow-up shell command to be run in the completed
   folder on success.  Try to delete experiment folder for up to 10 seconds if
   files are still being written.
@@ -150,6 +152,11 @@ Changelog
 TODO
 ----
 
+* -i flag should use its own permanent home, to avoid accidentally mucking up the home directory
+* Git results -v should show either a curses or webpage view of available files
+  and log entries to make perusing prior results more straightforward.
+* Git results message should be saved across build-fail runs.  That is, if build
+  fails, it should preserve the old message so I can simply amend it.
 * -r(estartable) flag to indicate max transient failure time; if run and a -run
   exists, it will restart an existing experiment after a warning raw_input().
 * -i should create a temporary file; git-results should never execute a new

@@ -179,6 +179,7 @@ class TestGitResults(unittest.TestCase):
         self.assertEqual(None, checkTag("results/test/run/1"))
         self._assertTagMatchesMessage("results/test/trash/run2/1")
         self.assertEqual(False, os.path.lexists("results/test/run"))
+        self.assertEqual(True, os.path.lexists("results/test/trash/run2/INDEX"))
 
         # Check dated / latest updates
         print("Testing {}".format(dateBase + "-test/run"))
@@ -249,9 +250,9 @@ class TestGitResults(unittest.TestCase):
             self.assertEqual("Hello, world\n",
                     open("results/test/run/1/stdout").read())
 
-            # If no commit is required, it should not need to prompt for a
+            # If no commit is required, it should still prompt for a
             # message.
-            os.environ['EDITOR'] = 'echo'
+            os.environ['EDITOR'] = 'echo "Commz" >'
             git_results.run(shlex.split("-c test/run2"))
             self.assertEqual("Hello, world\n",
                     open("results/test/run2/1/stdout").read())
@@ -315,6 +316,10 @@ class TestGitResults(unittest.TestCase):
         self.assertNotIn('hello_world_2', os.listdir('.'))
         self.assertNotIn('hello_world_2', os.listdir('results/test/run/1'))
 
+        # Ensure that the index was created
+        self.assertEqual("1 (  ok) - Let's see if it prints\n",
+                open('results/test/run/INDEX').read())
+
         # Now see if a failed test gets renamed appropriately
         with open("hello_world", "w") as f:
             f.write("ezeeeeecho 'Hello, world'")
@@ -345,6 +350,12 @@ class TestGitResults(unittest.TestCase):
         with self.assertRaises(SystemExit):
             git_results.run(shlex.split('test/run -m "take 3"'))
         testFail(3)
+
+        self.assertEqual(
+                "1 (  ok) - Let's see if it prints\n"
+                "2 (fail) - take 2\n"
+                "3 (fail) - take 3\n",
+                open('results/test/run/INDEX').read())
 
 
     def test_continuation(self):

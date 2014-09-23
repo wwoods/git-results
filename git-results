@@ -29,6 +29,12 @@ SUFFIXES = [ ABORT_SUFFIX, FAIL_SUFFIX, RUN_SUFFIX, '' ]
 # Overridden by tests to suppress raw_input
 IS_TEST = False
 
+class IndexStates(object):
+    ABORT = 'abrt'
+    FAIL = 'fail'
+    GONE = 'gone'
+    OK = '  ok'
+
 class FolderState(object):
     """An object that tracks which files exist at init and at another time,
     and can copy changes to another folder."""
@@ -49,7 +55,7 @@ class FolderState(object):
         self._scan(self._dir)
 
 
-    def copyResultsTo(self, dir, trimCommonPaths = False):
+    def moveResultsTo(self, dir, trimCommonPaths = False):
         """Copy changes from self._dir to dir.  Use most common path."""
         allChanges = set()
         self._scanChanges(self._dir, allChanges)
@@ -70,10 +76,7 @@ class FolderState(object):
                 target = os.path.relpath(c, prefix)
             target = os.path.join(dir, target)
             safeMake(os.path.dirname(target))
-            if not self._inPlace:
-                shutil.copy2(c, target)
-            else:
-                os.rename(c, target)
+            os.rename(c, target)
 
 
     def _isBanned(self, path):
@@ -153,6 +156,22 @@ def tee(infile, *files):
     t.daemon = True
     t.start()
     return t
+
+
+def updateIndex(commitTag, state):
+    """Given a commitTag from git (with or without suffix) and a new index
+    state, update the (xxxx) portion of the INDEX file to reflect the given
+    state.
+    """
+    path, exp = commitTag.rsplit('/', 1)
+    exp = exp.rsplit('-', 1)[0]
+    with open(os.path.join(path, 'INDEX'), 'r+') as f:
+        contents = f.read()
+        newcon = re.sub(r"^{} \(....\) - ".format(int(exp)),
+                "{} ({}) - ".format(int(exp), state),
+                contents, 0, re.MULTILINE)
+        f.seek(0)
+        f.write(newcon)
 
 
 def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
@@ -235,7 +254,7 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
 
         # If we reach here, everything ran OK, so copy files
         print("Copying results to {0}".format(resultsDirRelative))
-        fs.copyResultsTo(resultsDir, trimCommonPaths)
+        fs.moveResultsTo(resultsDir, trimCommonPaths)
 
         allDone = time.time()
         with open(os.path.join(resultsDir, 'git-results-message'), 'a') as f:
@@ -270,9 +289,7 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     """Sets up the experiment skeleton and commits the git repo to an acceptable
     state.
 
-    If message is unspecified AND a commit is occurring, will prompt for a
-    suitable message.  Otherwise, the tag number (including run number) will
-    be used.
+    If message is unspecified, will prompt for a suitable message.
 
     Returns the directory for results (absolute path), dated symlink path (for
     rollback / updated), latest symlink path, and the commit tag to run.
@@ -312,9 +329,13 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     tag = tag + "/{0}".format(n)
     gitTag = "{0}/{1}".format(resultsBaseRelative, tag)
 
-    if not message:
-        cleanMessage = gitTag
+    if message:
+        cleanMessage = _escapeString(message)
     else:
+        message = _getStringViaEditor("git-results needs a commit message")
+        if len(message) < 5 or message.startswith("Please replace"):
+            raise ValueError("Commit message must be at least 5 "
+                    "characters; got: '" + message + "'")
         cleanMessage = _escapeString(message)
 
     # Check the state of our git repo
@@ -324,14 +345,6 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
             sys.stderr.write("Repository has unsaved changes; use -c to commit "
                     "automatically.\n")
             sys.exit(1)
-
-        # Ensure that we have a message if we're doing a commit
-        if not message:
-            message = _getStringViaEditor("git-results needs a commit message")
-            if len(message) < 5 or message.startswith("Please replace"):
-                raise ValueError("Commit message must be at least 5 "
-                        "characters; got: '" + message + "'")
-            cleanMessage = _escapeString(message)
 
         # Make sure git-results-build and git-results-run are ignored
         gb = checked("git status git-results-build --porcelain --ignored")
@@ -356,6 +369,14 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     # Actually make our folder
     tagDirRun = tagDir + RUN_SUFFIX
     safeMake(tagDirRun)
+
+    # Ensure INDEX file
+    with open(os.path.join(resultsDir, pureTag, 'INDEX'), 'a') as f:
+        header = "{} ( run) - ".format(n)
+        wrapper = textwrap.TextWrapper(width = 79, initial_indent = '',
+                subsequent_indent = '  ')
+        f.write(wrapper.fill(header + message))
+        f.write('\n')
 
     # Dated linkage
     now = datetime.datetime.now()
@@ -506,7 +527,10 @@ def _auditMove(pathFrom, pathTo):
     """Audits that the given matchingTags can be moved from pathFrom to pathTo
     without collisions.
 
-    Returns matchingTags
+    Returns matchingTags - tagSrc, tagDst, dirSrc, dirDest, suffix.  Suffix
+    includes hyphen.  dirSrc and dirDest are highest ancestor and may be
+    redundant between several results.  tagSrc and tagDest are unique, and are
+    the actual numbered runs.
     """
     gitTags = [ t.strip() for t in checked(
             "git tag -l '{0}' '{0}/*'".format(pathFrom)).strip().split('\n') ]
@@ -529,7 +553,7 @@ def _auditMove(pathFrom, pathTo):
 
         if suffix is None:
             sys.stderr.write("Cannot find data for {0}".format(src))
-        matchingTags.append(( src, dest, suffix ))
+        matchingTags.append(( src, dest, pathFrom, pathTo, suffix ))
 
         # Check that the destination doesn't exist
         existingForms = []
@@ -604,7 +628,7 @@ def _runLink(args):
 
     # Do the links
     latestTracker = LatestTracker()
-    for tagSrc, tagDest, suffix in matchingTags:
+    for tagSrc, tagDest, _dirSrc, _dirDest, suffix in matchingTags:
         dirSrc = tagSrc + suffix
         dirDest = tagDest + suffix
         safeMake(os.path.dirname(dirDest))
@@ -661,32 +685,33 @@ def _runMove(args):
     # Everything seems OK, rename it all.  Start with all of the filesystem
     # changes since we can run git results resync (once implemented) afterwards.
     latestTracker = LatestTracker()
-    for tagSrc, tagDest, suffix in matchingTags:
-        dirSrc = tagSrc + suffix
-        dirDest = tagDest + suffix
-
-        safeMake(os.path.dirname(dirDest))
-        os.rename(dirSrc, dirDest)
-        safeRollback(os.path.dirname(dirSrc))
+    for tagSrc, tagDest, dirSrc, dirDest, suffix in matchingTags:
+        if os.path.lexists(dirSrc):
+            # This one hasn't been moved yet
+            safeMake(os.path.dirname(dirDest))
+            os.rename(dirSrc, dirDest)
+            safeRollback(os.path.dirname(dirSrc))
         tagMsg = checked("git tag -l -n1000 {0}".format(tagSrc)).strip()[
                 len(tagSrc):].strip()
         checked("git tag -a -m '{0}' {1} {2}".format(tagMsg.replace("'", "\'"),
                 tagDest, tagSrc))
         checked("git tag -d {0}".format(tagSrc))
-        latestTracker.addTagDir(dirSrc, dirDest, suffix)
+        latestTracker.addTagDir(tagSrc + suffix, tagDest + suffix, suffix)
 
         # We have to update any dated links...
         dateInfo = tagDates.get(tagSrc)
         if dateInfo:
-            sansResultDir = dirSrc.split('/', 1)[1]
+            tagDirDest = tagDest + suffix
+            sansResultDir = (tagSrc + suffix).split('/', 1)[1]
             oldLink = os.path.join(args.dir[0], 'dated', dateInfo[0],
                     dateInfo[1], dateInfo[2] + '-' + sansResultDir)
             os.unlink(oldLink)
             safeRollback(os.path.dirname(oldLink))
             targLink = os.path.join(args.dir[1], 'dated', dateInfo[0],
-                    dateInfo[1], dateInfo[2] + '-' + dirDest.split('/', 1)[1])
+                    dateInfo[1], dateInfo[2] + '-'
+                    + tagDirDest.split('/', 1)[1])
             safeMake(os.path.dirname(targLink))
-            os.symlink(os.path.relpath(dirDest, os.path.dirname(targLink)),
+            os.symlink(os.path.relpath(tagDirDest, os.path.dirname(targLink)),
                     targLink)
     latestTracker.commit(True)
 
@@ -831,22 +856,34 @@ def run(programArgs = None):
             os.unlink(latestLinkRun)
             safeRollback(os.path.dirname(latestLinkRun))
         shutil.rmtree(resultsDirRun)
-        safeRollback(os.path.dirname(resultsDirRun))
+        parDir = os.path.dirname(resultsDirRun)
+        if os.listdir(parDir) == [ 'INDEX' ]:
+            # INDEX is only file left, remove it and remove the directory
+            os.unlink(os.path.join(parDir, 'INDEX'))
+            safeRollback(os.path.dirname(resultsDirRun))
+        else:
+            # Update the index
+            updateIndex(commitTag, IndexStates.GONE)
         # Build failed for sure!
         sys.exit(1)
 
     # Move the RUN_SUFFIX folder to the appropriate suffix
     newSuffix = ""
+    indState = IndexStates.OK
     if runFailed:
         # We failed, but not due to a build failure.
         # Move our numbered file to one like "3-fail"
         newSuffix = FAIL_SUFFIX
+        indState = IndexStates.FAIL
         if runFailed == "abort":
             newSuffix = ABORT_SUFFIX
+            indState = IndexStates.ABORT
     resultsDirNew = resultsDir + newSuffix
 
     print("Moving {0} to {1}".format(resultsDirRun, resultsDirNew))
     os.rename(resultsDirRun, resultsDirNew)
+
+    updateIndex(commitTag, indState)
 
     oldLink = os.readlink(datedLinkRun)
     os.unlink(datedLinkRun)
