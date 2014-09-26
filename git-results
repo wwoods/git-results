@@ -167,11 +167,13 @@ def updateIndex(commitTag, state):
     exp = exp.rsplit('-', 1)[0]
     with open(os.path.join(path, 'INDEX'), 'r+') as f:
         contents = f.read()
-        newcon = re.sub(r"^{} \(....\) - ".format(int(exp)),
-                "{} ({}) - ".format(int(exp), state),
-                contents, 0, re.MULTILINE)
-        f.seek(0)
-        f.write(newcon)
+        lastMatch = None
+        for m in re.finditer(r"^{} \(....\) - ".format(int(exp)),
+                contents, re.MULTILINE):
+            lastMatch = m
+        if lastMatch is not None:
+            f.seek(lastMatch.start())
+            f.write("{} ({}) - ".format(int(exp), state))
 
 
 def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):

@@ -368,6 +368,27 @@ class TestGitResults(unittest.TestCase):
         self.assertEqual(True, os.path.lexists("results/test/run/3"))
 
 
+    def test_indexAbort(self):
+        # Ensure that failed build (which deletes the tag), remains marked
+        # (gone) forever.
+        self._setupRepo()
+        git_results.run(shlex.split("-c test/run -m 'h'"))
+        with open('git-results-build', 'w') as f:
+            f.write("hehehihoweihfowhef")
+        try:
+            git_results.run(shlex.split("-c test/run -m 'h1'"))
+            self.fail("Build didn't fail?")
+        except SystemExit:
+            pass
+        self.assertEqual("1 (  ok) - h\n2 (gone) - h1\n",
+                open('results/test/run/INDEX').read())
+        with open('git-results-build', 'w') as f:
+            f.write("cp hello_world hello_world_2")
+        git_results.run(shlex.split("-c test/run -m 'h2'"))
+        self.assertEqual("1 (  ok) - h\n2 (gone) - h1\n2 (  ok) - h2\n",
+                open('results/test/run/INDEX').read())
+
+
     def test_inPlace(self):
         # Ensure that in-place works
         self._setupRepo()
