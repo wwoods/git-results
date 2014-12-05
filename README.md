@@ -128,6 +128,9 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2014-12-5 - Added -x or --extra-file flags to copy a non-build file before the
+  build process.  I use this to "continue" old experiments currently.  It might
+  be better to just have a --resurrect flag in the future, but for now -x works.
 * 2014-9-23 - Added INDEX file at root of all experiment directories to help
   distinguish between different runs at a glance.  Message is required.
 * 2014-8-28 - -f flag for a follow-up shell command to be run in the completed
@@ -153,6 +156,9 @@ TODO
 ----
 
 * -i flag should use its own permanent home, to avoid accidentally mucking up the home directory
+  * Or... obsolete -i flag.  Use a pool of LIFO temporary folders, store git-results script pid to make sure you're not overwriting one that's in use.  If something goes wrong (files not copied out, e.g. pid file exists), delete a temporary directory.  None exist, make a new one.  This could shave minutes off of every experiment for long builds.
+* Latest linking is broken if two tests are started and the second one finishes
+  first (it looks for test-run, doesn't find it, bails)
 * Git results -v should show either a curses or webpage view of available files
   and log entries to make perusing prior results more straightforward.
 * Git results message should be saved across build-fail runs.  That is, if build

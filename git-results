@@ -76,7 +76,22 @@ class FolderState(object):
                 target = os.path.relpath(c, prefix)
             target = os.path.join(dir, target)
             safeMake(os.path.dirname(target))
-            os.rename(c, target)
+            try:
+                os.rename(c, target)
+            except OSError, e:
+                if e.errno != 2:
+                    # No such file; was temporary
+                    raise
+
+
+    def forgetPath(self, path):
+        """Forget a path and all subpaths."""
+        f = set()
+        for p in self._files:
+            if p.startswith(path):
+                f.add(p)
+        for p in f:
+            self._files.remove(p)
 
 
     def _isBanned(self, path):
@@ -176,7 +191,7 @@ def updateIndex(commitTag, state):
             f.write("{} ({}) - ".format(int(exp), state))
 
 
-def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
+def runExperiment(dir, extraFiles, resultsDir, commitTag, trimCommonPaths):
     """Given a directory to initialize and run our experiment in 'dir', run it
     and put results in 'resultsDir'
 
@@ -206,6 +221,11 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
                 shutil.copy2(os.path.join(odir, grFile), os.path.join(dir,
                         grFile))
 
+        # Copy supplementary (extra) files over to our tree before build
+        for f in extraFiles:
+            fFrm, fTo = f.split(':')
+            shutil.copy2(os.path.join(odir, fFrm), os.path.join(dir, fTo))
+
         preBuild = time.time()
 
         print("Building {0} in {1}".format(commitTag, dirRelative))
@@ -224,6 +244,9 @@ def runExperiment(dir, resultsDir, commitTag, trimCommonPaths):
         # changed as results.  We'll be a little smart and take off the greatest
         # common path too...
         fs = FolderState(dir, resultsDir)
+        for f in extraFiles:
+            _, fTo = f.split(':')
+            fs.forgetPath(os.path.join(os.path.join(dir, fTo)))
 
         print("Running {0} in {1}".format(commitTag, dirRelative))
         print("=" * 79)
@@ -750,6 +773,14 @@ def run(programArgs = None):
     ap.add_argument("-c", "--commit", action = 'store_true',
             help = "If there are uncommitted changes, automatically commit "
                 "with the message as given.")
+    ap.add_argument("-x", "--extra-file", action = 'append', default = [],
+            help = "Of form path1:path2, where path1 is relative or absolute "
+                "to the current working directory, and path2 is relative to "
+                "the execution root where git-results-run is called.  Copies "
+                "file path1 into path2 before running git-results-build and "
+                "git-results-run.  Note that the extra file will be included "
+                "as a \"result\".  That is, retained after the experiment "
+                "completes.  --extra-file can be specified multiple times.")
     ap.add_argument("-t", "--trim", action = 'store_true',
             help = "Trim output paths to most common denominator.  That is, if "
                 "the application creates folder results/a.txt, then since the "
@@ -820,7 +851,8 @@ def run(programArgs = None):
                     if e.errno != 17:
                         raise
         try:
-            r, abrt = runExperiment(expDir, resultsDirRun, commitTag, args.trim)
+            r, abrt = runExperiment(expDir, args.extra_file, resultsDirRun,
+                    commitTag, args.trim)
             if r != 0:
                 runFailed = True
                 if abrt:

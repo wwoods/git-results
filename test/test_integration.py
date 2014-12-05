@@ -358,6 +358,30 @@ class TestGitResults(unittest.TestCase):
                 open('results/test/run/INDEX').read())
 
 
+    def test_extraFile(self):
+        self._setupRepo()
+        with open('git-results-run', 'w') as f:
+            f.write("cat sa")
+        with open('someTestFile', 'w') as f:
+            f.write("Yay!")
+        try:
+            with self.assertRaises(SystemExit):
+                git_results.run(shlex.split("-c test/run -m 'h'"))
+            git_results.run(shlex.split(
+                    "-c test/run -m 'h' -x someTestFile:sa"))
+            git_results.run(shlex.split(
+                    "-c test/run -m 'h' --extra-file someTestFile:sa"))
+            self.assertEqual(True, os.path.lexists("results/test/run/1-fail"))
+            self.assertEqual(False, os.path.lexists("results/test/run/1-fail/sa"))
+            self.assertEqual(True, os.path.lexists("results/test/run/2/sa"))
+            self.assertEqual(True, os.path.lexists("results/test/run/2/sa"))
+            self.assertEqual(True, os.path.lexists("results/test/run/3/sa"))
+            self.assertEqual("Yay!", open("results/test/run/2/stdout").read())
+            self.assertEqual("Yay!", open("results/test/run/3/stdout").read())
+        finally:
+            os.remove('someTestFile')
+
+
     def test_continuation(self):
         # Ensure that the next run # is one higher than the greatest.
         self._setupRepo()
