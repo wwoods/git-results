@@ -273,6 +273,19 @@ def runExperiment(args, dir, extraFiles, resultsDir, commitTag,
         # The current retry index.
         retryIndex = 0
         if shouldBuild:
+            buildHeartbeatStop = False
+            buildHeartbeat = None
+            if args.retry_until_stall:
+                def hbUpdate():
+                    tsleep = args.retry_delay / 3.0
+                    touch(getPathForResumeKey(args.retryKey, "heartbeat"))
+                    while not buildHeartbeatStop:
+                        time.sleep(tsleep)
+                        touch(getPathForResumeKey(args.retryKey, "heartbeat"))
+                buildHeartbeat = threading.Thread(target = hbUpdate)
+                buildHeartbeat.daemon = True
+                buildHeartbeat.start()
+
             # Build not previously completed, rebuild project
             if dir is not None:
                 checked('git init')
@@ -283,8 +296,8 @@ def runExperiment(args, dir, extraFiles, resultsDir, commitTag,
                 for grFile in [ "git-results-build", "git-results-run",
                         "git-results-progress" ]:
                     if os.path.lexists(os.path.join(odir, grFile)):
-                        shutil.copy2(os.path.join(odir, grFile), os.path.join(dir,
-                                grFile))
+                        shutil.copy2(os.path.join(odir, grFile), os.path.join(
+                                dir, grFile))
 
             # Copy supplementary (extra) files over to our tree before build
             for f in extraFiles:
@@ -320,6 +333,9 @@ def runExperiment(args, dir, extraFiles, resultsDir, commitTag,
             preRun = time.time()
 
             if args.retry_until_stall:
+                buildHeartbeatStop = True
+                buildHeartbeat.join()
+
                 # Save fs so that we know that we've already built
                 writeRetryStats()
                 touch(getPathForResumeKey(args.retryKey, "heartbeat"))
@@ -336,10 +352,6 @@ def runExperiment(args, dir, extraFiles, resultsDir, commitTag,
                             "directory and marking experiment failed")
                     return 1, False
             fs = d['fs']
-            ddd = (os.path.getmtime(getPathForResumeKey(
-                    args.retryKey, "heartbeat")) - d['runStart'])
-            if ddd < 0:
-                raise Exception("WHAT THE HECK: {}".format(ddd))
             preRun = time.time() - (os.path.getmtime(getPathForResumeKey(
                     args.retryKey, "heartbeat")) - d['runStart'])
             preBuild = preRun - d['buildTime']
@@ -412,9 +424,6 @@ def runExperiment(args, dir, extraFiles, resultsDir, commitTag,
         print("=" * 79)
         print("=" * 79)
 
-        threadsShouldDie = True
-        [ t.join() for t in threads ]
-
         if r != 0:
             error.write(("\n\ngit-results detected abnormal program "
                     "termination: {0}\n").format(r))
@@ -460,6 +469,11 @@ def runExperiment(args, dir, extraFiles, resultsDir, commitTag,
                 f.write("{0} after {1}s\n".format("OK" if r == 0 else "FAIL",
                         allDone - preRun))
                 f.write("Build took {0}s\n".format(preRun - preBuild))
+
+        # Terminate e.g. heartbeat thread
+        threadsShouldDie = True
+        [ t.join() for t in threads ]
+
         return r, didAbort
     finally:
         os.chdir(odir)
