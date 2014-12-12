@@ -94,7 +94,7 @@ class TestRetry(GrTest):
 
 
     def test_supervisorDeleteBad(self):
-        rottenExperiment = os.path.expanduser("~/.gitresults/rBlahTest")
+        rottenExperiment = os.path.expanduser("~/.gitresults/rtestBlahTest")
         if os.path.lexists(rottenExperiment):
             shutil.rmtree(rottenExperiment)
         os.mkdir(rottenExperiment)
@@ -104,7 +104,7 @@ class TestRetry(GrTest):
 
 
     def test_supervisorIgnoreCorrupt(self):
-        rottenExperiment = os.path.expanduser("~/.gitresults/rBlahTest")
+        rottenExperiment = os.path.expanduser("~/.gitresults/rtestBlahTest")
         if os.path.lexists(rottenExperiment):
             shutil.rmtree(rottenExperiment)
         os.mkdir(rottenExperiment)
@@ -130,8 +130,10 @@ class TestRetry(GrTest):
         # Should retry our application
         started = git_results._runSupervisor([])
         [ p.wait() for p in started ]
+        self.assertEqual(1, len(started))
         self.assertEqual(True, os.path.lexists(keyFolder))
         started = git_results._runSupervisor([])
+        self.assertEqual(1, len(started))
         [ p.wait() for p in started ]
         self.assertEqual(False, os.path.lexists(keyFolder))
         started = git_results._runSupervisor([])

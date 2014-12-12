@@ -936,6 +936,10 @@ def _runSupervisor(args):
     # Used for tests
     allStarted = []
     for retryKey in exps:
+        isTestKey = retryKey.startswith("rtest")
+        if isTestKey and not IS_TEST or not isTestKey and IS_TEST:
+            continue
+
         if not os.path.lexists(getPathForResumeKey(retryKey, "settings")):
             # OK, the settings file doesn't even exist.  If it still doesn't in
             # a second (it is created RIGHT after the folder), then remove this
@@ -966,7 +970,12 @@ def _runSupervisor(args):
             startedCount += 1
             p = subprocess.Popen(shlex.split(
                     "git results --internal-retry-continue {}".format(
-                        retryKey)))
+                        retryKey)), stdout = subprocess.PIPE,
+                    stderr = subprocess.PIPE)
+            # Note - the ONLY reason that we tee these threads is so that
+            # nosetests will capture their output.
+            iothreads = [ tee(p.stdout, sys.stdout),
+                    tee(p.stderr, sys.stderr) ]
             allStarted.append(p)
     print("Supervisor finished; {} '-r' experiments restarted".format(
             startedCount))
@@ -1090,8 +1099,12 @@ def _run(programArgs):
                 sys.exit(1)
 
             LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            header = "r"
+            if IS_TEST:
+                header = "rtest"
             while True:
-                retryKey = "r" + ''.join([ random.choice(LETTERS) for _ in range(8) ])
+                retryKey = header + ''.join([ random.choice(LETTERS)
+                        for _ in range(8) ])
                 try:
                     os.makedirs(getPathForResumeKey(retryKey))
                     break
