@@ -129,8 +129,8 @@ class TestRetry(GrTest):
         os.chdir(tempfile.gettempdir())
         # Should retry our application
         started = git_results._runSupervisor([])
-        [ p.wait() for p in started ]
         self.assertEqual(1, len(started))
+        [ p.wait() for p in started ]
         self.assertEqual(True, os.path.lexists(keyFolder))
         started = git_results._runSupervisor([])
         self.assertEqual(1, len(started))
