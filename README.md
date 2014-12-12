@@ -6,8 +6,7 @@ A helper script / git extension for cataloging computation results
 Usage
 -----
 
-Simply put git-results somewhere on your PATH.  Then from a git repository,
-type:
+Put git-results somewhere on your PATH.  Then from a git repository, type:
 
     git results -h
 
@@ -96,6 +95,24 @@ less designed for at the moment, changing it could alter your running test if
 builds were in-place).
 
 
+Resuming / Re-Entrant git-results-run files
+-------------------------------------------
+
+If your application can resume itself in event of a power outage or other transient
+failure, git-results provides the -r or --retry-until-stall flag which instructs
+git-results to try executing an experiment repeatedly until it finishes.
+
+This technique requires an extra file: git-results-progress.  This file may have
+any output, but its final line must be a non-decreasing floating point value that
+is indicative of progress.  For instance, if you have a log or output file that
+your application writes as progress occurs, then the modification time of that
+log file would work great (stat -c %Y results.csv).
+
+Additionally, "git results supervisor" needs to be in your crontab or some
+other scheduler to run every minute or so.  This command scans for unresponsive
+trials and starts them again.
+
+
 Special Directories
 -------------------
 
@@ -128,6 +145,14 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2014-12-11 - Added -r or --retry-until-stall flag to register a run with
+  git-results --supervisor, which scans a user's .gitresults directory attempting to
+  start any experiments that have stopped and are still in -run state.  Note
+  that without a git-results-progress file, which MUST OUTPUT A SINGLE,
+  MONOTONICALLY INCREASING NUMBER BASED ON PROGRESS, an experiment registered
+  with -r will complain.  This file is mandatory so that transient errors can
+  be detected.  Even with no change in progress, an experiment will be retried
+  3 times (--retry-minimum) with 60 seconds between tries (--retry-delay).
 * 2014-12-5 - Added -x or --extra-file flags to copy a non-build file before the
   build process.  I use this to "continue" old experiments currently.  It might
   be better to just have a --resurrect flag in the future, but for now -x works.
@@ -157,6 +182,7 @@ TODO
 
 * -i flag should use its own permanent home, to avoid accidentally mucking up the home directory
   * Or... obsolete -i flag.  Use a pool of LIFO temporary folders, store git-results script pid to make sure you're not overwriting one that's in use.  If something goes wrong (files not copied out, e.g. pid file exists), delete a temporary directory.  None exist, make a new one.  This could shave minutes off of every experiment for long builds.
+* --clean flag to clean up extant -run that aren't registered with -r.
 * Latest linking is broken if two tests are started and the second one finishes
   first (it looks for test-run, doesn't find it, bails)
 * Git results -v should show either a curses or webpage view of available files

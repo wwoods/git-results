@@ -1,34 +1,11 @@
 
 import datetime
-import imp
 import os
 import re
 import shlex
 import shutil
-import stat
-import subprocess
-import sys
-import tempfile
-import unittest
 
-GR_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-        "../git-results")
-git_results = imp.new_module('git_results')
-exec open(GR_FILE).read() in git_results.__dict__
-
-def addExec(fname):
-    os.chmod(fname, os.stat(fname).st_mode | stat.S_IEXEC)
-
-
-def checked(cmd):
-    p = subprocess.Popen(cmd, shell = True, stdout = subprocess.PIPE,
-            stderr = subprocess.PIPE)
-    stdout, stderr = p.communicate()
-    r = p.wait()
-
-    if r != 0:
-        raise AssertionError("Command failed {}: {}".format(r, stderr))
-    return stdout
+from .common import GrTest, git_results, addExec, checked
 
 
 def checkTag(tag):
@@ -40,31 +17,7 @@ def checkTag(tag):
             0].strip()
 
 
-class TestGitResults(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        git_results.IS_TEST = True
-        cls._OLD_STDERR = sys.stderr
-        sys.stderr = sys.stdout
-        cls.rootDir = tempfile.mkdtemp()
-
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.rootDir)
-        sys.stderr = cls._OLD_STDERR
-        git_results.IS_TEST = False
-
-
-    def setUp(self):
-        self.__oldDir = os.getcwd()
-        os.chdir(self.rootDir)
-
-
-    def tearDown(self):
-        os.chdir(self.__oldDir)
-
-
+class TestGitResults(GrTest):
     def _assertTagMatchesMessage(self, tag, suffix = ""):
         """Ensure that the git-results-message file matches the tagged commit.
         """
@@ -82,20 +35,9 @@ class TestGitResults(unittest.TestCase):
                 now.strftime('%m'), now.strftime('%d'))
 
 
-    def _remakeAndChdirTmp(self):
-        try:
-            shutil.rmtree("tmp")
-        except OSError, e:
-            # Does not exist
-            if e.errno != 2:
-                raise
-        git_results.safeMake("tmp")
-        os.chdir("tmp")
-
-
     def _setupRepo(self):
         """Initializes the "tmp" directory with a basic repo from the readme."""
-        self._remakeAndChdirTmp()
+        self.initAndChdirTmp()
         checked("git init")
         with open("hello_world", "w") as f:
             f.write("echo 'Hello, world'\n")
@@ -472,7 +414,7 @@ class TestGitResults(unittest.TestCase):
 
     def test_readme(self):
         # Ensure that the README scenario works
-        self._remakeAndChdirTmp()
+        self.initAndChdirTmp()
         checked("git init")
         checked("touch git-results-build")
         checked("echo 'echo \"Hello, world\"' > git-results-run")

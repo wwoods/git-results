@@ -5,7 +5,9 @@
 from __future__ import print_function
 
 import argparse
+import cPickle as pickle
 import datetime
+import inspect
 import os
 import random
 import re
@@ -22,6 +24,13 @@ import threading
 import time
 import traceback
 
+# For pickle, we're using git_results.* for class names.  So, shenanigans
+__oname__ = __name__
+class __dummy(object):
+    pass
+sys.modules['git_results'] = inspect.getmodule(__dummy)
+__name__ = 'git_results'
+
 ABORT_SUFFIX = '-abrt'
 FAIL_SUFFIX = '-fail'
 RUN_SUFFIX = '-run'
@@ -34,6 +43,7 @@ class IndexStates(object):
     FAIL = 'fail'
     GONE = 'gone'
     OK = '  ok'
+
 
 class FolderState(object):
     """An object that tracks which files exist at init and at another time,
@@ -158,6 +168,17 @@ def ensureGitignore(resultsDir):
             f.write("\n/{0}".format(resultsDir))
 
 
+def getPathForResumeKey(resumeKey, filename = None):
+    base = os.path.expanduser("~/.gitresults")
+    if resumeKey:
+        base = os.path.join(base, resumeKey)
+        if filename:
+            base = os.path.join(base, filename)
+    elif filename:
+        raise Exception("filename but no resumeKey?")
+    return base
+
+
 def tee(infile, *files):
     """Thanks to http://stackoverflow.com/a/4985080/160205, tee lines from the
     given file to one or more other files.
@@ -171,6 +192,12 @@ def tee(infile, *files):
     t.daemon = True
     t.start()
     return t
+
+
+def touch(fname):
+    """Thanks to http://stackoverflow.com/questions/1158076/implement-touch-using-python"""
+    with open(fname, 'a'):
+        os.utime(fname, None)
 
 
 def updateIndex(commitTag, state):
@@ -191,12 +218,38 @@ def updateIndex(commitTag, state):
             f.write("{} ({}) - ".format(int(exp), state))
 
 
-def runExperiment(dir, extraFiles, resultsDir, commitTag, trimCommonPaths):
+def runExperiment(args, dir, extraFiles, resultsDir, commitTag,
+        trimCommonPaths):
     """Given a directory to initialize and run our experiment in 'dir', run it
     and put results in 'resultsDir'
 
+    Populates args.isGoingToRetry if args.retry_until_stall is set.
+
     dir can be None for current dir (not a temporary directory!)
     """
+
+    # If False, this is a retry that has already been built.
+    shouldBuild = True
+    # Folder state post-build; used to identify run results vs build
+    # intermediates
+    fs = None
+    if args.retry_until_stall:
+        # Set this attribute so that we have access to it
+        args.isGoingToRetry = False
+        if os.path.lexists(getPathForResumeKey(args.retryKey, "build-state")):
+            shouldBuild = False
+
+        def writeRetryStats():
+            """Write a bunch of stats from our closure"""
+            open(getPathForResumeKey(args.retryKey, "build-state.new"),
+                    'w').write(pickle.dumps({
+                        'buildTime': preRun - preBuild,
+                        'runStart': preRun,
+                        'fs': fs,
+                        'progress': lastProgress,
+                        'retry': retryIndex }))
+            os.rename(getPathForResumeKey(args.retryKey, "build-state.new"),
+                    getPathForResumeKey(args.retryKey, "build-state"))
 
     if dir is None:
         dirRelative = '.'
@@ -206,99 +259,210 @@ def runExperiment(dir, extraFiles, resultsDir, commitTag, trimCommonPaths):
     resultsDirRelative = resultsDir
     resultsDir = os.path.abspath(resultsDir)
     odir = os.getcwd()
-    tmpDirLink = os.path.join(resultsDir, 'git-results-tmp')
+    if dir is not None:
+        os.chdir(dir)
     try:
-        os.symlink(os.path.abspath(dir or '.'), tmpDirLink)
+        # Timers
+        preBuild = preRun = None
+        # Keeps track of last known completed progress _at the start_ of an
+        # execution.
+        # Used to determine stalls (intransient errors).  Updated at end of
+        # execution (on failure) if there was a change in progress since the
+        # last update.
+        lastProgress = -1e300
+        # The current retry index.
+        retryIndex = 0
+        if shouldBuild:
+            # Build not previously completed, rebuild project
+            if dir is not None:
+                checked('git init')
+                checked('git remote add origin file://{0}'.format(odir))
+                checked('git fetch origin {0}'.format(commitTag))
+                checked('git reset --hard FETCH_HEAD')
+                copySymlinks(odir, dir)
+                for grFile in [ "git-results-build", "git-results-run",
+                        "git-results-progress" ]:
+                    if os.path.lexists(os.path.join(odir, grFile)):
+                        shutil.copy2(os.path.join(odir, grFile), os.path.join(dir,
+                                grFile))
 
-        if dir is not None:
-            os.chdir(dir)
-            checked('git init')
-            checked('git remote add origin file://{0}'.format(odir))
-            checked('git fetch origin {0}'.format(commitTag))
-            checked('git reset --hard FETCH_HEAD')
-            copySymlinks(odir, dir)
-            for grFile in [ "git-results-build", "git-results-run" ]:
-                shutil.copy2(os.path.join(odir, grFile), os.path.join(dir,
-                        grFile))
+            # Copy supplementary (extra) files over to our tree before build
+            for f in extraFiles:
+                fFrm, fTo = f.split(':')
+                shutil.copy2(os.path.join(odir, fFrm), os.path.join(dir, fTo))
 
-        # Copy supplementary (extra) files over to our tree before build
-        for f in extraFiles:
-            fFrm, fTo = f.split(':')
-            shutil.copy2(os.path.join(odir, fFrm), os.path.join(dir, fTo))
+            preBuild = time.time()
 
-        preBuild = time.time()
+            print("Building {0} in {1}".format(commitTag, dirRelative))
+            # stderr redirection benefits nosetests, mainly.
+            p = subprocess.Popen(os.path.abspath('./git-results-build'),
+                    shell = True,
+                    stdout = subprocess.PIPE,
+                    stderr = subprocess.STDOUT)
+            thread = tee(p.stdout, sys.stdout)
+            thread.join()
+            r = p.wait()
+            if r != 0:
+                print("== BUILD FAILED ==")
+                sys.exit(1)
 
-        print("Building {0} in {1}".format(commitTag, dirRelative))
-        # stderr redirection benefits nosetests, mainly.
-        p = subprocess.Popen(os.path.abspath('./git-results-build'),
-                shell = True, stdout = subprocess.PIPE,
-                stderr = subprocess.STDOUT)
-        thread = tee(p.stdout, sys.stdout)
-        thread.join()
-        r = p.wait()
-        if r != 0:
-            print("== BUILD FAILED ==")
-            sys.exit(1)
+            # Now that we've built it, snapshot the folder so we can copy whatever
+            # changed as results.  We'll be a little smart and take off the
+            # greatest common path too...
+            fs = FolderState(dir, resultsDir)
+            for f in extraFiles:
+                _, fTo = f.split(':')
+                fs.forgetPath(os.path.join(os.path.join(dir, fTo)))
 
-        # Now that we've built it, snapshot the folder so we can copy whatever
-        # changed as results.  We'll be a little smart and take off the greatest
-        # common path too...
-        fs = FolderState(dir, resultsDir)
-        for f in extraFiles:
-            _, fTo = f.split(':')
-            fs.forgetPath(os.path.join(os.path.join(dir, fTo)))
+            # Actual run starts now..ish.  Yes, this doesn't include scanning
+            # the folder state.  However, for a retry, we want to remember both
+            # how long the build took and the cumulative runtime.
+            preRun = time.time()
 
+            if args.retry_until_stall:
+                # Save fs so that we know that we've already built
+                writeRetryStats()
+                touch(getPathForResumeKey(args.retryKey, "heartbeat"))
+        else:
+            # Previously built OK, use old values
+            try:
+                d = pickle.loads(open(getPathForResumeKey(args.retryKey,
+                        "build-state")).read())
+            except pickle.UnpicklingError:
+                # Corrupt test; mark as failed, append to stderr!
+                with open('{0}/stderr'.format(resultsDir), 'a') as f:
+                    f.write("\n\ngit-results detected bad formatting for "
+                            "pickle file build-state; copied to result "
+                            "directory and marking experiment failed")
+                    return 1, False
+            fs = d['fs']
+            ddd = (os.path.getmtime(getPathForResumeKey(
+                    args.retryKey, "heartbeat")) - d['runStart'])
+            if ddd < 0:
+                raise Exception("WHAT THE HECK: {}".format(ddd))
+            preRun = time.time() - (os.path.getmtime(getPathForResumeKey(
+                    args.retryKey, "heartbeat")) - d['runStart'])
+            preBuild = preRun - d['buildTime']
+            lastProgress = d['progress']
+            retryIndex = d['retry']
+            touch(getPathForResumeKey(args.retryKey, "heartbeat"))
+
+
+        hasProgress = os.path.lexists('./git-results-progress')
         print("Running {0} in {1}".format(commitTag, dirRelative))
         print("=" * 79)
         print("=" * 79)
-        preRun = time.time()
 
-        threads = None
+        threadsShouldDie = False
+        threads = []
+
+        if hasProgress:
+            def checkProgress():
+                """Returns the monotonically increasing, floating-point number
+                that denotes progress.  If retry_until_stall is set, also
+                updates the progress file associated with the retry."""
+                cmd = os.path.abspath('./git-results-progress')
+                p = subprocess.Popen(cmd, shell = True,
+                        stdout = subprocess.PIPE,
+                        stderr = subprocess.PIPE)
+                stdout, stderr = p.communicate()
+                r = p.wait()
+                try:
+                    value = float(stdout.strip().split('\n')[-1])
+                except ValueError:
+                    raise ValueError(("Last non-blank line must be a "
+                            + "floating-point number; was: {}").format(
+                                stdout.strip().split('\n')[-1]))
+                return value
+        if args.retry_until_stall:
+            # Update heartbeats
+            def hbUpdate():
+                tsleep = args.retry_delay / 3.0
+                while not threadsShouldDie:
+                    time.sleep(tsleep)
+                    touch(getPathForResumeKey(args.retryKey, "heartbeat"))
+            hbThread = threading.Thread(target = hbUpdate)
+            hbThread.daemon = True
+            hbThread.start()
+            threads.append(hbThread)
+
+        iothreads = []
         didAbort = False
         try:
             # Special handling for our runner script
             line_buffered = 1
-            output = open('{0}/stdout'.format(resultsDir), 'w', line_buffered)
-            error = open('{0}/stderr'.format(resultsDir), 'w', line_buffered)
-            p = subprocess.Popen(os.path.abspath('./git-results-run'), shell = True,
-                    stdout = subprocess.PIPE, stderr = subprocess.PIPE)
-            threads = [ tee(p.stdout, output, sys.stdout),
+            output = open('{0}/stdout'.format(resultsDir), 'a', line_buffered)
+            error = open('{0}/stderr'.format(resultsDir), 'a', line_buffered)
+            p = subprocess.Popen(os.path.abspath('./git-results-run'),
+                    shell = True, stdout = subprocess.PIPE,
+                    stderr = subprocess.PIPE)
+            iothreads = [ tee(p.stdout, output, sys.stdout),
                     tee(p.stderr, error, sys.stderr) ]
-            [ t.join() for t in threads ]
+            [ t.join() for t in iothreads ]
             r = p.wait()
         except KeyboardInterrupt:
             # Child got Ctrl+C,
             print("== CTRL+C caught by git-results; child should exit as per "
                     "CTRL+C semantics")
-            [ t.join() for t in threads ]
+            [ t.join() for t in iothreads ]
             r = p.wait()
             didAbort = True
 
-        print("=" * 79)
-        print("=" * 79)
-
-        # If we reach here, everything ran OK, so copy files
-        print("Copying results to {0}".format(resultsDirRelative))
-        fs.moveResultsTo(resultsDir, trimCommonPaths)
-
         allDone = time.time()
-        with open(os.path.join(resultsDir, 'git-results-message'), 'a') as f:
-            f.write("\n\n")
-            f.write("{0} after {1}s\n".format("OK" if r == 0 else "FAIL",
-                    allDone - preRun))
-            f.write("Build took {0}s\n".format(preRun - preBuild))
+        print("=" * 79)
+        print("=" * 79)
+
+        threadsShouldDie = True
+        [ t.join() for t in threads ]
 
         if r != 0:
             error.write(("\n\ngit-results detected abnormal program "
                     "termination: {0}\n").format(r))
             print("Non-zero exit status after {0}: {1}".format(allDone - preRun,
                     r))
+
+            if args.retry_until_stall and not didAbort:
+                # Chance of supervisor retry...
+                if not hasProgress:
+                    raise Exception("No git-results-progress but "
+                            "retry_until_stall?")
+                newProgress = checkProgress()
+                if lastProgress > newProgress:
+                    raise Exception("Progress MUST be a non-decreasing "
+                            + "function")
+                elif lastProgress == newProgress:
+                    # Stall; note that the FIRST potentially transient failure
+                    # will happen with lastProgress != newProgress, so if
+                    # retryIndex was 0, this is technically the first retry
+                    retryIndex += 1
+                    if args.retry_minimum > retryIndex:
+                        args.isGoingToRetry = True
+                        writeRetryStats()
+                    else:
+                        # Cannot retry!
+                        pass
+                else:
+                    # Progress!
+                    lastProgress = newProgress
+                    retryIndex = 0
+                    args.isGoingToRetry = True
+                    writeRetryStats()
         else:
             print("OK after {0}".format(allDone - preRun))
+
+        if not args.retry_until_stall or not args.isGoingToRetry:
+            # If we reach here, everything ran OK, so copy files
+            print("Copying results to {0}".format(resultsDirRelative))
+            fs.moveResultsTo(resultsDir, trimCommonPaths)
+
+            with open(os.path.join(resultsDir, 'git-results-message'), 'a') as f:
+                f.write("\n\n")
+                f.write("{0} after {1}s\n".format("OK" if r == 0 else "FAIL",
+                        allDone - preRun))
+                f.write("Build took {0}s\n".format(preRun - preBuild))
         return r, didAbort
     finally:
         os.chdir(odir)
-        os.unlink(tmpDirLink)
 
 
 def safeMake(path):
@@ -382,6 +546,11 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
             # Same
             with open(".gitignore", "a") as f:
                 f.write("\n/git-results-run")
+        gb = checked("git status git-results-progress --porcelain --ignored")
+        if gb and not gb.startswith("!!"):
+            # Same
+            with open(".gitignore", "a") as f:
+                f.write("\n/git-results-progress")
 
         # If this fails, the branch didn't exist or we're already on it, both
         # of which are fine
@@ -437,6 +606,9 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
         f.write(open('git-results-run').read())
         f.write("\n\ngit-results-build\n-----------------\n")
         f.write(open('git-results-build').read())
+        if os.path.lexists('git-results-progress'):
+            f.write("\n\ngit-results-progress\n-----------------\n")
+            f.write(open('git-results-progress').read())
         f.write("\n\nStarted {0}".format(now.strftime("%Y-%m-%dT%H:%M:%S")))
 
     return tagDirRun, linkAs, latestLinkAs, gitTag
@@ -470,9 +642,16 @@ def safeRollback(d):
     try:
         os.removedirs(d)
     except OSError, e:
-        # Directory not empty
-        if e.errno != 39:
+        # Directory not empty OR no such file or directory
+        if e.errno != 39 and e.errno != 2:
             raise
+
+
+def _checkGit():
+    """Raises Exception if cwd does not have a .git folder"""
+    if not os.path.isdir('.git'):
+        print("Must be used in a git directory!")
+        sys.exit(1)
 
 
 def _escapeString(st):
@@ -741,22 +920,85 @@ def _runMove(args):
     latestTracker.commit(True)
 
 
-def run(programArgs = None):
-    if not os.path.isdir('.git'):
-        print("Must be used in a git directory!")
-        sys.exit(1)
+def _runSupervisor(args):
+    """Runs the supervisor functionality.  That is, restarts any processes that
+    have not updated their heartbeats in awhile."""
+    ap = argparse.ArgumentParser("Designed to be put in crontab (or some other "
+            "scheduler).  Retries experiments started with --retry-until-stall "
+            "or -r if they are no longer running.")
+    args = ap.parse_args(args)
+    retryDir = os.path.expanduser("~/.gitresults")
 
+    exps = os.path.lexists(retryDir) and os.listdir(retryDir) or []
+
+    now = time.time()
+    startedCount = 0
+    # Used for tests
+    allStarted = []
+    for retryKey in exps:
+        if not os.path.lexists(getPathForResumeKey(retryKey, "settings")):
+            # OK, the settings file doesn't even exist.  If it still doesn't in
+            # a second (it is created RIGHT after the folder), then remove this
+            # experiment.
+            time.sleep(1.0)
+            if not os.path.lexists(getPathForResumeKey(retryKey, "settings")):
+                print("Deleting experiment {}, failed to reach settings".format(
+                        retryKey))
+                shutil.rmtree(getPathForResumeKey(retryKey))
+                continue
+
+        # If we reach here, there are settings to be checked and respected
+        try:
+            expArgs = pickle.loads(open(getPathForResumeKey(retryKey, "settings"))
+                    .read())
+        except pickle.UnpicklingError:
+            print("Corrupt experiment {}, unpickle of settings failed".format(
+                    retryKey))
+            continue
+        expMtime = os.path.getmtime(getPathForResumeKey(retryKey, "settings"))
+        if os.path.lexists(getPathForResumeKey(retryKey, "heartbeat")):
+            expMtime = os.path.getmtime(getPathForResumeKey(retryKey,
+                    "heartbeat"))
+
+        if now - expMtime > expArgs.retry_delay:
+            # Launch it!
+            print("Resuming experiment {}".format(retryKey))
+            startedCount += 1
+            p = subprocess.Popen(shlex.split(
+                    "git results --internal-retry-continue {}".format(
+                        retryKey)))
+            allStarted.append(p)
+    print("Supervisor finished; {} '-r' experiments restarted".format(
+            startedCount))
+    return allStarted
+
+
+def run(programArgs = None):
+    """Wraps _run, which does the work, so that the cwd is preserved.  Used for
+    tests."""
+    odir = os.getcwd()
+    try:
+        return _run(programArgs)
+    finally:
+        os.chdir(odir)
+
+
+def _run(programArgs):
     if programArgs is None:
         programArgs = sys.argv[1:]
 
     if programArgs[0] == "move":
+        _checkGit()
         return _runMove(programArgs[1:])
     elif programArgs[0] == "link":
+        _checkGit()
         return _runLink(programArgs[1:])
+    elif programArgs[0] == "supervisor":
+        return _runSupervisor(programArgs[1:])
 
     ap = argparse.ArgumentParser(description = "A git extension for cataloging "
-            "computation results.  Subcommands available: move, link (e.g. "
-            "git results move -h)")
+            "computation results.  Subcommands available: move, link, "
+            "supervisor (e.g. git results move -h)")
     ap.add_argument("-d", "--dir", help = "Directory used "
             "to store results.  Automatically created and set up as a git "
             "repo.  Also automatically added to .gitignore")
@@ -793,6 +1035,29 @@ def run(programArgs = None):
             "results directory on successful completion.  Useful for e.g. "
             "opening generated images when you don't want to put this in "
             "git-results-run")
+    ap.add_argument("-r", "--retry-until-stall", action = 'store_true',
+            help = "Registers the experiment with git-results supervisor, which "
+            "will automatically retry the experiment until it succeeds or an "
+            "error appears intransient.  Requires git-results-progress script, "
+            "which calculates and produces output ending with a single line with only a floating-point "
+            "number that is expected to keep increasing as progress happens (it should never decrease).  "
+            "Any lines except for the final line will overwrite /progress in the "
+            "experiment folder.  Pairs with --retry-minimum and --retry-delay to "
+            "determine how many times a transient failure without progress will "
+            "be retried, and what the delay between trials is.")
+    ap.add_argument("--retry-minimum", type = int, default = 3, help = "Number of "
+            "times to retry a transient failure (see --retry-until-stall)")
+    def checkDelay(x):
+        v = float(x)
+        if v < 10.0 and not IS_TEST:
+            raise ValueError("--retry-delay must be >= 10: {}".format(v))
+        return v
+    ap.add_argument("--retry-delay", type = checkDelay, default = 20,
+            help = "Seconds between retries (see --retry-until-stall).  Must "
+                "be >= 10")
+    ap.add_argument("--internal-retry-continue", action = 'store_true',
+            help = "Used by supervisor, resumes a previously aborted experiment.  "
+            "Uses the corresponding values saved in ~/.gitresults/[tagKey]/settings")
     ap.add_argument("tag", help = textwrap.dedent("""
             Path to organize these results under.  For instance, giving a tag of parity/squids
             will create a git tag for the commit as results/parity/squids, and will create the
@@ -802,17 +1067,51 @@ def run(programArgs = None):
             "latest" is invalid as well, referring to another unique folder."""))
     args = ap.parse_args(programArgs)
 
-    _processTagArgs(args, "path", "dir", "tag")
-    # _processTagArgs sets args.dir to a list of directories.  For the main
-    # functionality, we only have one dir.
-    args.dir = args.dir[0]
+    if args.internal_retry_continue:
+        # args.tag is our key for resuming a paused experiment.
+        args = pickle.loads(open(getPathForResumeKey(args.tag, "settings"))
+                .read())
+    else:
+        # Starting a new experiment
+        _checkGit()
+        args.cwd = os.getcwd()
+        _processTagArgs(args, "path", "dir", "tag")
+        # _processTagArgs sets args.dir to a list of directories.  For the main
+        # functionality, we only have one dir.
+        args.dir = args.dir[0]
 
+        if args.retry_until_stall:
+            if not os.path.isfile('git-results-progress'):
+                print(textwrap.dedent("""
+                        To use git-results with the -r or --retry-until-stall flag, you must have
+                        a file named git-results-progress in your repository's root.  This file
+                        can output anything, but the final line of output must contain only a floating
+                        point number, which monotonically increases as work progresses."""))
+                sys.exit(1)
+
+            LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            while True:
+                retryKey = "r" + ''.join([ random.choice(LETTERS) for _ in range(8) ])
+                try:
+                    os.makedirs(getPathForResumeKey(retryKey))
+                    break
+                except OSError, e:
+                    if e.errno != 17:
+                        # Folder already exists
+                        raise
+            args.retryKey = retryKey
+            with open(getPathForResumeKey(retryKey, "settings"), 'w') as f:
+                f.write(pickle.dumps(args))
+
+    # Ensure we're in the right folder
+    os.chdir(args.cwd)
     if not os.path.isfile('git-results-build'):
         print(textwrap.dedent("""
                 To use git-results, two files are required: git-results-run and
                 git-results-build.  Even if git-results-build is empty, it must exist.
                 git-results-build should be a script that builds resources used by
                 git-results-run."""))
+        sys.exit(1)
 
     if not os.path.isfile('git-results-run'):
         print(textwrap.dedent("""
@@ -821,14 +1120,28 @@ def run(programArgs = None):
                 line of text that runs your experiment."""))
         sys.exit(1)
 
-    # OK, run the experiment
-    resultsDirRun, datedLinkRun, latestLinkRun, commitTag = setupExperiment(
-            args.dir, args.commit, args.tag, args.message)
+    if not hasattr(args, 'setupInfo'):
+        # Set up the experiment
+        resultsDirRun, datedLinkRun, latestLinkRun, commitTag = setupExperiment(
+                args.dir, args.commit, args.tag, args.message)
+        if args.retry_until_stall:
+            args.setupInfo = [ resultsDirRun, datedLinkRun, latestLinkRun,
+                    commitTag ]
+            with open(getPathForResumeKey(args.retryKey, "settings.new"), 'w') as f:
+                f.write(pickle.dumps(args))
+            os.rename(getPathForResumeKey(args.retryKey, "settings.new"),
+                    getPathForResumeKey(args.retryKey, "settings"))
+            with open(os.path.join(resultsDirRun, "git-results-retry-key"), 'w') as f:
+                f.write(args.retryKey)
+    else:
+        resultsDirRun, datedLinkRun, latestLinkRun, commitTag = args.setupInfo
+
     resultsDir = resultsDirRun[:-len(RUN_SUFFIX)]
     datedLink = datedLinkRun[:-len(RUN_SUFFIX)]
     latestLink = latestLinkRun[:-len(RUN_SUFFIX)]
 
     runFailed = False
+    runWillRetry = False
     try:
         # NOTE - For e.g. MPI, or other network tasks, we do not use the
         # standard tempfile methods.  The path has to be accessible on all
@@ -838,27 +1151,55 @@ def run(programArgs = None):
             expDir = None
         else:
             safeMake(os.path.join(args.dir, ".tmp"))
-            while True:
-                randName = "".join([
-                        random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-                        for _ in range(8) ])
-                expDir = os.path.join(args.dir, ".tmp", randName)
+            if args.retry_until_stall:
+                # Use the retry key as the temporary folder
+                expDir = os.path.join(args.dir, ".tmp", args.retryKey)
                 try:
+                    # Make the dir, if it already exists that's OK
                     os.mkdir(expDir)
-                    break
                 except OSError, e:
-                    # Already exists
                     if e.errno != 17:
                         raise
+            else:
+                # We need a temporary folder
+                while True:
+                    randName = "".join([
+                            random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+                            for _ in range(8) ])
+                    expDir = os.path.join(args.dir, ".tmp", randName)
+                    try:
+                        os.mkdir(expDir)
+                        break
+                    except OSError, e:
+                        # Already exists
+                        if e.errno != 17:
+                            raise
+
+        # Link expDir into git-results-tmp
+        tmpDirLink = os.path.join(resultsDirRun, 'git-results-tmp')
         try:
-            r, abrt = runExperiment(expDir, args.extra_file, resultsDirRun,
-                    commitTag, args.trim)
+            os.symlink(os.path.abspath(expDir or '.'), tmpDirLink)
+        except OSError, e:
+            # Already exists
+            if e.errno != 17:
+                raise
+
+        try:
+            r, abrt = runExperiment(args, expDir, args.extra_file,
+                    resultsDirRun, commitTag, args.trim)
             if r != 0:
                 runFailed = True
                 if abrt:
                     runFailed = "abort"
+
+            if args.retry_until_stall:
+                # Supervisor will retry, make sure that the experiment's
+                # progress is NOT deleted
+                runWillRetry = args.isGoingToRetry
         finally:
-            if expDir is not None:
+            if not runWillRetry:
+                os.unlink(tmpDirLink)
+            if expDir is not None and not runWillRetry:
                 s = time.time()
                 failing = True
                 while time.time() - s < 10.0:
@@ -878,28 +1219,58 @@ def run(programArgs = None):
                     print("Could not remove {}".format(expDir))
                 safeRollback(os.path.dirname(expDir))
     except:
-        # Roll back our tag and results folders...
-        traceback.print_exc()
+        # Roll back our tag and results folders...  This catches a build fail
+        print("Caught error (presumably in build): {}".format(
+                traceback.format_exc()))
         print("Deleting {0} and associated tags / links".format(resultsDirRun))
-        checked("git tag -d {0}".format(commitTag))
-        os.unlink(datedLinkRun)
+        checked("git tag -d {0}".format(commitTag), nonZeroOk = [ 1 ])
+        try:
+            os.unlink(datedLinkRun)
+        except OSError, e:
+            # File does not exist is OK, we were just trying to delete it anyway
+            if e.errno != 2:
+                raise
         safeRollback(os.path.dirname(datedLinkRun))
-        oldLink = os.readlink(latestLinkRun)
-        if os.path.abspath(os.path.join(os.path.dirname(latestLinkRun),
-                oldLink)) == os.path.abspath(resultsDirRun):
-            os.unlink(latestLinkRun)
-            safeRollback(os.path.dirname(latestLinkRun))
-        shutil.rmtree(resultsDirRun)
+        try:
+            oldLink = os.readlink(latestLinkRun)
+            if os.path.abspath(os.path.join(os.path.dirname(latestLinkRun),
+                    oldLink)) == os.path.abspath(resultsDirRun):
+                os.unlink(latestLinkRun)
+                safeRollback(os.path.dirname(latestLinkRun))
+        except OSError, e:
+            # Link doesn't exist?
+            if e.errno != 2:
+                raise
+        try:
+            shutil.rmtree(resultsDirRun)
+        except OSError, e:
+            # Doesn't exist
+            if e.errno != 2:
+                raise
         parDir = os.path.dirname(resultsDirRun)
-        if os.listdir(parDir) == [ 'INDEX' ]:
-            # INDEX is only file left, remove it and remove the directory
-            os.unlink(os.path.join(parDir, 'INDEX'))
-            safeRollback(os.path.dirname(resultsDirRun))
-        else:
-            # Update the index
-            updateIndex(commitTag, IndexStates.GONE)
+        try:
+            if os.listdir(parDir) == [ 'INDEX' ]:
+                # INDEX is only file left, remove it and remove the directory
+                os.unlink(os.path.join(parDir, 'INDEX'))
+                safeRollback(os.path.dirname(resultsDirRun))
+            else:
+                # Update the index
+                updateIndex(commitTag, IndexStates.GONE)
+        except OSError, e:
+            # Doesn't exist
+            if e.errno != 2:
+                raise
+
+        if args.retry_until_stall:
+            # Get rid of experiment entirely
+            shutil.rmtree(getPathForResumeKey(args.retryKey))
+
         # Build failed for sure!
         sys.exit(1)
+
+    if runWillRetry:
+        print("Exiting without cleaning up, supervisor will retry")
+        sys.exit(2)
 
     # Move the RUN_SUFFIX folder to the appropriate suffix
     newSuffix = ""
@@ -931,6 +1302,11 @@ def run(programArgs = None):
         os.symlink(oldLink[:-len(RUN_SUFFIX)] + newSuffix,
                 latestLink + newSuffix)
 
+    # If we get here, then we're done without hope of retry
+    if args.retry_until_stall:
+        shutil.rmtree(getPathForResumeKey(args.retryKey))
+        os.unlink(os.path.join(resultsDirNew, "git-results-retry-key"))
+
     if runFailed:
         sys.exit(1)
     elif args.follow_cmd:
@@ -941,5 +1317,5 @@ def run(programArgs = None):
                     .format(args.follow_cmd, r))
 
 
-if __name__ == '__main__':
+if __oname__ == '__main__':
     run()
