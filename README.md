@@ -145,6 +145,10 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2015-1-7 - Fixed up crashes during filesystem move in two ways: First, all
+  files that can be copied are copied before an error is reported.  Second,
+  any errors during this phase of the simulation will cause the experiment to
+  be marked failed rather than deleted.
 * 2014-12-11 - Added -r or --retry-until-stall flag to register a run with
   git-results --supervisor, which scans a user's .gitresults directory attempting to
   start any experiments that have stopped and are still in -run state.  Note

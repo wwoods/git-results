@@ -334,6 +334,45 @@ class TestGitResults(GrTest):
         self.assertEqual(True, os.path.lexists("results/test/run/3"))
 
 
+    def test_failToMoveResults(self):
+        # Ensure that if a result file fails to move, the test is marked as
+        # failed
+        old = git_results.FolderState.moveResultsTo
+        def newMove(self, dir, trimCommonPaths = False):
+            oldRename = os.rename
+            def newRename(a, b):
+                print "RENAMING {}".format(a)
+                if os.path.basename(a) == "blah":
+                    raise OSError(88, "blah is a silly file")
+                else:
+                    return oldRename(a, b)
+            os.rename = newRename
+            try:
+                return old(self, dir, trimCommonPaths = trimCommonPaths)
+            finally:
+                os.rename = oldRename
+        git_results.FolderState.moveResultsTo = newMove
+        try:
+            self._setupRepo()
+            with open('git-results-run', 'w') as f:
+                f.write("echo yodel > alpha\n")
+                f.write("echo gosh > blah\n")
+                f.write("echo gee > cansas\n")
+
+            with self.assertRaises(SystemExit):
+                git_results.run(shlex.split("-c test/run -m 'h'"))
+
+            self.assertEqual(False, os.path.lexists("results/test/run/1"))
+            self.assertEqual(True, os.path.lexists("results/test/run/1-fail"))
+            self.assertEqual(True, os.path.lexists("results/test/run/1-fail/alpha"))
+            self.assertEqual(False, os.path.lexists("results/test/run/1-fail/blah"))
+            self.assertEqual(True, os.path.lexists("results/test/run/1-fail/cansas"))
+            self.assertIn("blah: OSError: [Errno 88] blah is a silly file\n",
+                    open("results/test/run/1-fail/stderr").read())
+        finally:
+            git_results.FolderState.moveResultsTo = old
+
+
     def test_indexAbort(self):
         # Ensure that failed build (which deletes the tag), remains marked
         # (gone) forever.

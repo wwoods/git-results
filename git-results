@@ -78,6 +78,7 @@ class FolderState(object):
                 while not c.startswith(prefix):
                     prefix = os.path.dirname(prefix)
 
+        allErrors = []
         for c in allChanges:
             # Add 1 to len(prefix) so that we don't include the preceding slash,
             # which would make os.path.join treat it as an absolute
@@ -89,9 +90,15 @@ class FolderState(object):
             try:
                 os.rename(c, target)
             except OSError, e:
+                # 2 - No such file; was temporary
                 if e.errno != 2:
-                    # No such file; was temporary
-                    raise
+                    allErrors.append("{0}: {1}".format(c, ''.join(
+                            traceback.format_exception_only(
+                                *sys.exc_info()[:2]))))
+
+        if allErrors:
+            raise Exception("Errors during file move:\n\n{0}".format(
+                    '\n\n'.join(allErrors)))
 
 
     def forgetPath(self, path):
@@ -234,7 +241,7 @@ def runExperiment(args, dir, extraFiles, resultsDir, commitTag,
     # intermediates
     fs = None
     if args.retry_until_stall:
-        # Set this attribute so that we have access to it
+        # Set this attribute so that we have access to it.
         args.isGoingToRetry = False
         if os.path.lexists(getPathForResumeKey(args.retryKey, "build-state")):
             shouldBuild = False
@@ -400,11 +407,11 @@ def runExperiment(args, dir, extraFiles, resultsDir, commitTag,
 
         iothreads = []
         didAbort = False
+        # Special handling for our runner script
+        line_buffered = 1
+        output = open('{0}/stdout'.format(resultsDir), 'a', line_buffered)
+        error = open('{0}/stderr'.format(resultsDir), 'a', line_buffered)
         try:
-            # Special handling for our runner script
-            line_buffered = 1
-            output = open('{0}/stdout'.format(resultsDir), 'a', line_buffered)
-            error = open('{0}/stderr'.format(resultsDir), 'a', line_buffered)
             p = subprocess.Popen(os.path.abspath('./git-results-run'),
                     shell = True, stdout = subprocess.PIPE,
                     stderr = subprocess.PIPE)
@@ -424,51 +431,65 @@ def runExperiment(args, dir, extraFiles, resultsDir, commitTag,
         print("=" * 79)
         print("=" * 79)
 
-        if r != 0:
-            error.write(("\n\ngit-results detected abnormal program "
-                    "termination: {0}\n").format(r))
-            print("Non-zero exit status after {0}: {1}".format(allDone - preRun,
-                    r))
+        # Any exceptions raised cause the whole experiment to be deleted.
+        # So, catch them, redirect them to error, and
+        try:
+            if r != 0:
+                error.write(("\n\ngit-results detected abnormal program "
+                        "termination: {0}\n").format(r))
+                print("Non-zero exit status after {0}: {1}".format(
+                        allDone - preRun, r))
 
-            if args.retry_until_stall and not didAbort:
-                # Chance of supervisor retry...
-                if not hasProgress:
-                    raise Exception("No git-results-progress but "
-                            "retry_until_stall?")
-                newProgress = checkProgress()
-                if lastProgress > newProgress:
-                    raise Exception("Progress MUST be a non-decreasing "
-                            + "function")
-                elif lastProgress == newProgress:
-                    # Stall; note that the FIRST potentially transient failure
-                    # will happen with lastProgress != newProgress, so if
-                    # retryIndex was 0, this is technically the first retry
-                    retryIndex += 1
-                    if args.retry_minimum > retryIndex:
+                if args.retry_until_stall and not didAbort:
+                    # Chance of supervisor retry...
+                    if not hasProgress:
+                        raise Exception("No git-results-progress but "
+                                "retry_until_stall?")
+                    newProgress = checkProgress()
+                    if lastProgress > newProgress:
+                        raise Exception("Progress MUST be a non-decreasing "
+                                + "function")
+                    elif lastProgress == newProgress:
+                        # Stall; note that the FIRST potentially transient
+                        # failure will happen with lastProgress != newProgress,
+                        # so if retryIndex was 0, this is technically the first
+                        # retry
+                        retryIndex += 1
+                        if args.retry_minimum > retryIndex:
+                            args.isGoingToRetry = True
+                            writeRetryStats()
+                        else:
+                            # Cannot retry!
+                            pass
+                    else:
+                        # Progress!
+                        lastProgress = newProgress
+                        retryIndex = 0
                         args.isGoingToRetry = True
                         writeRetryStats()
-                    else:
-                        # Cannot retry!
-                        pass
-                else:
-                    # Progress!
-                    lastProgress = newProgress
-                    retryIndex = 0
-                    args.isGoingToRetry = True
-                    writeRetryStats()
-        else:
-            print("OK after {0}".format(allDone - preRun))
+            else:
+                print("OK after {0}".format(allDone - preRun))
 
-        if not args.retry_until_stall or not args.isGoingToRetry:
-            # If we reach here, everything ran OK, so copy files
-            print("Copying results to {0}".format(resultsDirRelative))
-            fs.moveResultsTo(resultsDir, trimCommonPaths)
+            if not args.retry_until_stall or not args.isGoingToRetry:
+                with open(os.path.join(resultsDir, 'git-results-message'),
+                        'a') as f:
+                    f.write("\n\n")
+                    f.write("{0} after {1}s\n".format(
+                            "OK" if r == 0 else "FAIL", allDone - preRun))
+                    f.write("Build took {0}s\n".format(preRun - preBuild))
 
-            with open(os.path.join(resultsDir, 'git-results-message'), 'a') as f:
-                f.write("\n\n")
-                f.write("{0} after {1}s\n".format("OK" if r == 0 else "FAIL",
-                        allDone - preRun))
-                f.write("Build took {0}s\n".format(preRun - preBuild))
+                # If we reach here, everything ran OK, so copy files
+                print("Copying results to {0}".format(resultsDirRelative))
+                fs.moveResultsTo(resultsDir, trimCommonPaths)
+        except:
+            # Only thing we change is that our result is no longer zero.
+            tbErr = traceback.format_exc()
+            sys.stderr.write(tbErr)
+            error.write("\n\ngit-results error: {0}\n".format(tbErr))
+
+            if r == 0:
+                # It's over 9000
+                r = 9001
 
         # Terminate e.g. heartbeat thread
         threadsShouldDie = True
