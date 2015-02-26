@@ -598,8 +598,12 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
 
         indexFile = os.path.join(resultsBaseRelative, tag, 'INDEX')
         if os.path.lexists(indexFile):
-            for nid in re.finditer(r'^(\d+) \(', open(indexFile).read()):
-                n = max(n, int(nid.group(1)) + 1)
+            for nid in re.finditer(r'^(\d+) \((....)\)',
+                    open(indexFile).read(), re.M):
+                # GONE experiments are no longer registered, so their numbers
+                # can be reused
+                if nid.group(2) != IndexStates.GONE:
+                    n = max(n, int(nid.group(1)) + 1)
 
     pureTag = tag
     tagDir = os.path.join(resultsBaseRelative, tag + "/{0}".format(n))
@@ -652,6 +656,8 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     tagDirRun = tagDir + RUN_SUFFIX
     safeMake(tagDirRun)
 
+    linkAs = None
+    latestLinkAs = None
     try:
         # Ensure INDEX file
         with open(os.path.join(resultsDir, pureTag, 'INDEX'), 'a') as f:
@@ -702,10 +708,12 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     except:
         safeRemoveDir(tagDirRun)
         safeRollback(os.path.dirname(tagDirRun))
-        safeRemove(linkAs)
-        safeRollback(os.path.dirname(linkAs))
-        safeRemove(latestLinkAs)
-        safeRollback(os.path.dirname(latestLinkAs))
+        if linkAs is not None:
+            safeRemove(linkAs)
+            safeRollback(os.path.dirname(linkAs))
+        if latestLinkAs is not None:
+            safeRemove(latestLinkAs)
+            safeRollback(os.path.dirname(latestLinkAs))
         checked('git tag -d "{0}"'.format(gitTag), nonZeroOk = [ 1 ])
         indexExpunge(gitTag)
         raise

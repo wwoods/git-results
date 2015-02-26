@@ -493,3 +493,7 @@ class TestGitResults(GrTest):
         shutil.rmtree("results/test/1")
         git_results.run(shlex.split('-cp results/test -m "take 2"'))
         self.assertTrue(os.path.lexists("results/test/2"))
+        # Ensure multiline support works OK
+        shutil.rmtree("results/test/2")
+        git_results.run(shlex.split('-cp results/test -m "take 3"'))
+        self.assertTrue(os.path.lexists("results/test/3"))
