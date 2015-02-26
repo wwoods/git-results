@@ -207,7 +207,21 @@ def touch(fname):
         os.utime(fname, None)
 
 
-def updateIndex(commitTag, state):
+def indexExpunge(commitTag):
+    """Cleans up after commitTag.  If the INDEX is the only thing left, remove
+    it and the folder.  Otherwise, replace INDEX tag with (gone).
+    """
+    parDir, exp = commitTag.rsplit('/', 1)
+    if os.listdir(parDir) == [ 'INDEX' ]:
+        # INDEX is only file left, remove it and remove the directory
+        safeRemove(os.path.join(parDir, 'INDEX'))
+        safeRollback(parDir)
+    else:
+        # Update the index
+        indexUpdate(commitTag, IndexStates.GONE)
+
+
+def indexUpdate(commitTag, state):
     """Given a commitTag from git (with or without suffix) and a new index
     state, update the (xxxx) portion of the INDEX file to reflect the given
     state.
@@ -509,6 +523,37 @@ def safeMake(path):
             raise
 
 
+def safeRemove(f):
+    """Removes a single file, safely"""
+    try:
+        os.remove(f)
+    except OSError, e:
+        # No such file or directory
+        if e.errno != 2:
+            raise
+
+
+def safeRemoveDir(d):
+    try:
+        shutil.rmtree(d)
+    except OSError, e:
+        # No such file or directory
+        if e.errno != 2:
+            raise
+
+
+def safeRollback(d):
+    """Delete d and all parent directories (up to most common directory with
+    current directory)
+    """
+    try:
+        os.removedirs(d)
+    except OSError, e:
+        # Directory not empty OR no such file or directory
+        if e.errno != 39 and e.errno != 2:
+            raise
+
+
 def setupExperiment(resultsDir, shouldCommit, tag, message):
     """Sets up the experiment skeleton and commits the git repo to an acceptable
     state.
@@ -539,6 +584,8 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     # Allow / encourage running same tag several times.  We'll use /1, /2, etc
     n = 1
     if os.path.lexists(os.path.join(resultsBaseRelative, tag)):
+        # Folder containing results under this tag exists.  Check both extant
+        # folders and INDEX file to get next index.
         for run in os.listdir(os.path.join(resultsBaseRelative, tag)):
             # Remove any suffixes
             run = run.split('-', 1)[0]
@@ -548,6 +595,12 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
                 # Not an integer, probably a file someone bundled in with the
                 # results.
                 pass
+
+        indexFile = os.path.join(resultsBaseRelative, tag, 'INDEX')
+        if os.path.lexists(indexFile):
+            for nid in re.finditer(r'^(\d+) \(', open(indexFile).read()):
+                n = max(n, int(nid.group(1)) + 1)
+
     pureTag = tag
     tagDir = os.path.join(resultsBaseRelative, tag + "/{0}".format(n))
     tag = tag + "/{0}".format(n)
@@ -599,52 +652,63 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     tagDirRun = tagDir + RUN_SUFFIX
     safeMake(tagDirRun)
 
-    # Ensure INDEX file
-    with open(os.path.join(resultsDir, pureTag, 'INDEX'), 'a') as f:
-        header = "{} ( run) - ".format(n)
-        wrapper = textwrap.TextWrapper(width = 79, initial_indent = '',
-                subsequent_indent = '  ')
-        f.write(wrapper.fill(header + message))
-        f.write('\n')
+    try:
+        # Ensure INDEX file
+        with open(os.path.join(resultsDir, pureTag, 'INDEX'), 'a') as f:
+            header = "{} ( run) - ".format(n)
+            wrapper = textwrap.TextWrapper(width = 79, initial_indent = '',
+                    subsequent_indent = '  ')
+            f.write(wrapper.fill(header + message))
+            f.write('\n')
 
-    # Dated linkage
-    now = datetime.datetime.now()
-    dated = os.path.join(resultsDir, 'dated', now.strftime("%Y"),
-            now.strftime("%m"))
-    safeMake(dated)
+        # Dated linkage
+        now = datetime.datetime.now()
+        dated = os.path.join(resultsDir, 'dated', now.strftime("%Y"),
+                now.strftime("%m"))
+        safeMake(dated)
 
-    linkAs = os.path.join(dated, "{0}-{1}{2}".format(now.strftime("%d"), tag,
-            RUN_SUFFIX))
-    safeMake(os.path.dirname(linkAs))
-    parentLevel = 2 + len(tag.split('/'))
-    os.symlink(os.path.relpath(tagDirRun, os.path.dirname(linkAs)), linkAs)
+        linkAs = os.path.join(dated, "{0}-{1}{2}".format(now.strftime("%d"), tag,
+                RUN_SUFFIX))
+        safeMake(os.path.dirname(linkAs))
+        parentLevel = 2 + len(tag.split('/'))
+        os.symlink(os.path.relpath(tagDirRun, os.path.dirname(linkAs)), linkAs)
 
-    latestLinkAs = os.path.join(resultsDir, 'latest', pureTag + RUN_SUFFIX)
-    safeMake(os.path.dirname(latestLinkAs))
-    for s in SUFFIXES:
-        linkPath = os.path.join(resultsDir, 'latest', pureTag + s)
-        if os.path.lexists(linkPath):
-            os.unlink(linkPath)
-    os.symlink(os.path.relpath(tagDirRun, os.path.dirname(latestLinkAs)),
-            latestLinkAs)
+        latestLinkAs = os.path.join(resultsDir, 'latest', pureTag + RUN_SUFFIX)
+        safeMake(os.path.dirname(latestLinkAs))
+        for s in SUFFIXES:
+            linkPath = os.path.join(resultsDir, 'latest', pureTag + s)
+            if os.path.lexists(linkPath):
+                os.unlink(linkPath)
+        os.symlink(os.path.relpath(tagDirRun, os.path.dirname(latestLinkAs)),
+                latestLinkAs)
 
-    # Add our tag to the git repo
-    checked('git tag -a -m "{0}" {1}'.format(cleanMessage, gitTag))
+        # Add our tag to the git repo
+        checked('git tag -a -m "{0}" {1}'.format(cleanMessage, gitTag))
 
-    # Write our message file
-    with open(os.path.join(tagDirRun, "git-results-message"), "w") as f:
-        f.write("{0}\n{1}\n".format(gitTag, "=" * min(79, len(gitTag))))
-        if message:
-            f.write("{0}\n".format(message))
-        f.write("\nCommit: {0}".format(curCommit))
-        f.write("\n\ngit-results-run\n---------------\n")
-        f.write(open('git-results-run').read())
-        f.write("\n\ngit-results-build\n-----------------\n")
-        f.write(open('git-results-build').read())
-        if os.path.lexists('git-results-progress'):
-            f.write("\n\ngit-results-progress\n-----------------\n")
-            f.write(open('git-results-progress').read())
-        f.write("\n\nStarted {0}".format(now.strftime("%Y-%m-%dT%H:%M:%S")))
+        # Write our message file
+        with open(os.path.join(tagDirRun, "git-results-message"), "w") as f:
+            f.write("{0}\n{1}\n".format(gitTag, "=" * min(79, len(gitTag))))
+            if message:
+                f.write("{0}\n".format(message))
+            f.write("\nCommit: {0}".format(curCommit))
+            f.write("\n\ngit-results-run\n---------------\n")
+            f.write(open('git-results-run').read())
+            f.write("\n\ngit-results-build\n-----------------\n")
+            f.write(open('git-results-build').read())
+            if os.path.lexists('git-results-progress'):
+                f.write("\n\ngit-results-progress\n-----------------\n")
+                f.write(open('git-results-progress').read())
+            f.write("\n\nStarted {0}".format(now.strftime("%Y-%m-%dT%H:%M:%S")))
+    except:
+        safeRemoveDir(tagDirRun)
+        safeRollback(os.path.dirname(tagDirRun))
+        safeRemove(linkAs)
+        safeRollback(os.path.dirname(linkAs))
+        safeRemove(latestLinkAs)
+        safeRollback(os.path.dirname(latestLinkAs))
+        checked('git tag -d "{0}"'.format(gitTag), nonZeroOk = [ 1 ])
+        indexExpunge(gitTag)
+        raise
 
     return tagDirRun, linkAs, latestLinkAs, gitTag
 
@@ -668,18 +732,6 @@ def checkTag(s):
     if isInt:
         raise ValueError("Tag may not end in a number")
     return s
-
-
-def safeRollback(d):
-    """Delete d and all parent directories (up to most common directory with
-    current directory)
-    """
-    try:
-        os.removedirs(d)
-    except OSError, e:
-        # Directory not empty OR no such file or directory
-        if e.errno != 39 and e.errno != 2:
-            raise
 
 
 def _checkGit():
@@ -999,7 +1051,9 @@ def _runSupervisor(args):
             expMtime = os.path.getmtime(getPathForResumeKey(retryKey,
                     "heartbeat"))
 
-        if now - expMtime > expArgs.retry_delay:
+        # Note - we allow a 1 second offset since file system times are rounded,
+        # which can cause us issues.
+        if now - expMtime >= expArgs.retry_delay - 1.0:
             # Launch it!
             print("Resuming experiment {}".format(retryKey))
             startedCount += 1
@@ -1289,25 +1343,8 @@ def _run(programArgs):
             # Link doesn't exist?
             if e.errno != 2:
                 raise
-        try:
-            shutil.rmtree(resultsDirRun)
-        except OSError, e:
-            # Doesn't exist
-            if e.errno != 2:
-                raise
-        parDir = os.path.dirname(resultsDirRun)
-        try:
-            if os.listdir(parDir) == [ 'INDEX' ]:
-                # INDEX is only file left, remove it and remove the directory
-                os.unlink(os.path.join(parDir, 'INDEX'))
-                safeRollback(os.path.dirname(resultsDirRun))
-            else:
-                # Update the index
-                updateIndex(commitTag, IndexStates.GONE)
-        except OSError, e:
-            # Doesn't exist
-            if e.errno != 2:
-                raise
+        safeRemoveDir(resultsDirRun)
+        indexExpunge(commitTag)
 
         if args.retry_until_stall:
             # Get rid of experiment entirely
@@ -1336,7 +1373,7 @@ def _run(programArgs):
     print("Moving {0} to {1}".format(resultsDirRun, resultsDirNew))
     os.rename(resultsDirRun, resultsDirNew)
 
-    updateIndex(commitTag, indState)
+    indexUpdate(commitTag, indState)
 
     oldLink = os.readlink(datedLinkRun)
     os.unlink(datedLinkRun)

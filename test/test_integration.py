@@ -465,3 +465,31 @@ class TestGitResults(GrTest):
             self.fail(str(e))
         self.assertEqual("Hello, world\n",
                 open("results/test/run/1/stdout").read())
+
+
+    def test_tagFail(self):
+        # Induce a scenario where a tag exists and we try to write over it.
+        # Ensure that the folder no longer exists
+        self._setupRepo()
+
+        git_results.run(shlex.split('-cp results/test -m "take 1"'))
+        self.assertTrue(os.path.lexists("results/test/1"))
+        # Note that the tag isn't deleted!
+        shutil.rmtree("results")
+
+        with self.assertRaises(Exception):
+            git_results.run(shlex.split('-cp results/test -m "take 2"'))
+        # Ensure our folder doesn't exist
+        self.assertFalse(os.path.lexists("results/test/1"))
+
+
+    def test_tagNextFromIndex(self):
+        # Ensure that the next test number comes not only from folders, but
+        # also the index
+        self._setupRepo()
+
+        git_results.run(shlex.split('-cp results/test -m "take 1"'))
+        self.assertTrue(os.path.lexists("results/test/1"))
+        shutil.rmtree("results/test/1")
+        git_results.run(shlex.split('-cp results/test -m "take 2"'))
+        self.assertTrue(os.path.lexists("results/test/2"))
