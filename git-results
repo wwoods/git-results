@@ -41,8 +41,16 @@ IS_TEST = False
 class IndexStates(object):
     ABORT = 'abrt'
     FAIL = 'fail'
+    # GONE means BUILD FAILURE
     GONE = 'gone'
     OK = '  ok'
+    MOVE = 'move'
+    RUN = ' run'
+for key, val in IndexStates.__dict__.iteritems():
+    if key[0] == '_':
+        continue
+    if len(val) != 4:
+        raise ValueError("IndexState {} has len(val) != 4".format(key))
 
 
 class FolderState(object):
@@ -168,11 +176,11 @@ def copySymlinks(frm, to):
             copySymlinks(ffrm, fto)
 
 
-def ensureGitignore(resultsDir):
+def ensureGitignore(repoBase, resultsRoot):
     if not checked("git status {0}/.gitignore --porcelain --ignored".format(
-            resultsDir)).startswith("!!"):
-        with open('.gitignore', 'a') as f:
-            f.write("\n/{0}".format(resultsDir))
+            resultsRoot)).startswith("!!"):
+        with open(os.path.join(repoBase, '.gitignore'), 'a') as f:
+            f.write("\n/{0}".format(resultsRoot))
 
 
 def getPathForResumeKey(resumeKey, filename = None):
@@ -207,28 +215,110 @@ def touch(fname):
         os.utime(fname, None)
 
 
+def index_splitTag(commitTag):
+    """Splits (and validates) a commit tag into corresponding INDEX file and
+    the experiment index within the file (as a string)."""
+    if commitTag.startswith('/'):
+        raise ValueError("Should not be an absolute path! {}".format(commitTag))
+    indexDir, exp = commitTag.rsplit('/', 1)
+    exp = exp.rsplit('-', 1)[0]
+    try:
+        int(exp)
+    except ValueError:
+        raise ValueError("Bad experiment number? {}".format(commitTag))
+
+    return (os.path.join(indexDir, 'INDEX'), exp)
+
+
 def indexExpunge(commitTag):
-    """Cleans up after commitTag.  If the INDEX is the only thing left, remove
-    it and the folder.  Otherwise, replace INDEX tag with (gone).
+    """Marks the given commitTag as GONE, for e.g. build failures.  Never
+    deletes INDEX, since that is where we save the commit message.  Which will
+    be used for the next default.
     """
-    parDir, exp = commitTag.rsplit('/', 1)
-    if os.listdir(parDir) == [ 'INDEX' ]:
-        # INDEX is only file left, remove it and remove the directory
-        safeRemove(os.path.join(parDir, 'INDEX'))
-        safeRollback(parDir)
-    else:
-        # Update the index
-        indexUpdate(commitTag, IndexStates.GONE)
+    # Update the index
+    indexUpdate(commitTag, IndexStates.GONE)
+
+
+class NotInIndexError(Exception):
+    pass
+
+
+def indexRead(commitTag):
+    """Returns (index, state, message) for given commitTag's entry in INDEX
+    file.  Raises NotInIndexError if commitTag not found in INDEX."""
+    indexFile, exp = index_splitTag(commitTag)
+    if not os.path.lexists(indexFile):
+        raise NotInIndexError("Tag {} not found in INDEX (no INDEX)".format(
+                commitTag))
+
+    with open(indexFile, 'r') as f:
+        contents = f.read()
+
+    mState = None
+    mStart = None
+    mEnd = None
+    for m in re.finditer(r"^(\d+) \((....)\) - ", contents, re.MULTILINE):
+        if m.group(1) == exp:
+            mState = m.group(2)
+            mStart = m.end()
+        elif mStart is not None:
+            mEnd = m.start()
+            break
+
+    if mStart is None:
+        raise NotInIndexError("Tag {} not found in INDEX".format(commitTag))
+
+    if mEnd is None:
+        mEnd = len(contents)
+
+    return (exp, mState, contents[mStart:mEnd].strip())
+
+
+def indexWrite(commitTag, state, message):
+    """Overwrites (or appends) the record for commitTag to the corresponding
+    INDEX file."""
+    indexFile, exp = index_splitTag(commitTag)
+    safeMake(os.path.dirname(indexFile))
+
+    # Generate our record.
+    header = "{} ({}) - ".format(exp, state)
+    wrapper = textwrap.TextWrapper(width = 79, initial_indent = '',
+            subsequent_indent = '  ')
+    record = wrapper.fill(header + message.strip()) + "\n"
+
+    with open(indexFile, 'a+') as f:
+        f.seek(0)
+        contents = f.read()
+        fStart = None
+        fEnd = None
+        for m in re.finditer(r"^(\d+) \(....\) - ", contents, re.MULTILINE):
+            if m.group(1) == exp:
+                fStart = m.start()
+            elif fStart is not None:
+                fEnd = m.start()
+                break
+
+        if fStart is None:
+            # Append to end
+            f.seek(len(contents))
+            f.write(record)
+        else:
+            if fEnd is None:
+                fEnd = len(contents)
+
+            # Overwrite interval [fStart, fEnd)
+            f.seek(0)
+            f.truncate()
+            f.write(''.join([ contents[:fStart], record, contents[fEnd:] ]))
 
 
 def indexUpdate(commitTag, state):
     """Given a commitTag from git (with or without suffix) and a new index
     state, update the (xxxx) portion of the INDEX file to reflect the given
-    state.
+    state.  Preserves the message.
     """
-    path, exp = commitTag.rsplit('/', 1)
-    exp = exp.rsplit('-', 1)[0]
-    with open(os.path.join(path, 'INDEX'), 'r+') as f:
+    indexFile, exp = index_splitTag(commitTag)
+    with open(indexFile, 'r+') as f:
         contents = f.read()
         lastMatch = None
         for m in re.finditer(r"^{} \(....\) - ".format(int(exp)),
@@ -237,12 +327,16 @@ def indexUpdate(commitTag, state):
         if lastMatch is not None:
             f.seek(lastMatch.start())
             f.write("{} ({}) - ".format(int(exp), state))
+        else:
+            raise ValueError("{} not found in INDEX".format(commitTag))
 
 
-def runExperiment(args, dir, extraFiles, resultsDir, commitTag,
+def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
         trimCommonPaths):
     """Given a directory to initialize and run our experiment in 'dir', run it
     and put results in 'resultsDir'
+
+    workingDir - Relative to dir, where to execute from.
 
     Populates args.isGoingToRetry if args.retry_until_stall is set.
 
@@ -310,20 +404,24 @@ def runExperiment(args, dir, extraFiles, resultsDir, commitTag,
             # Build not previously completed, rebuild project
             if dir is not None:
                 checked('git init')
-                checked('git remote add origin file://{0}'.format(odir))
+                checked('git remote add origin file://{0}'.format(args.base))
                 checked('git fetch origin {0}'.format(commitTag))
                 checked('git reset --hard FETCH_HEAD')
-                copySymlinks(odir, dir)
+                copySymlinks(args.base, dir)
                 for grFile in [ "git-results-build", "git-results-run",
                         "git-results-progress" ]:
-                    if os.path.lexists(os.path.join(odir, grFile)):
-                        shutil.copy2(os.path.join(odir, grFile), os.path.join(
-                                dir, grFile))
+                    if os.path.lexists(os.path.join(args.base, grFile)):
+                        shutil.copy2(os.path.join(args.base, grFile),
+                                os.path.join(dir, grFile))
+
+            # At this point, we have the directory with the right git-results-*.
+            os.chdir(workingDir or os.path.curdir)
 
             # Copy supplementary (extra) files over to our tree before build
             for f in extraFiles:
                 fFrm, fTo = f.split(':')
-                shutil.copy2(os.path.join(odir, fFrm), os.path.join(dir, fTo))
+                shutil.copy2(os.path.join(args.base, fFrm),
+                        os.path.join(dir, fTo))
 
             preBuild = time.time()
 
@@ -379,6 +477,9 @@ def runExperiment(args, dir, extraFiles, resultsDir, commitTag,
             lastProgress = d['progress']
             retryIndex = d['retry']
             touch(getPathForResumeKey(args.retryKey, "heartbeat"))
+
+            # Already have the directory with the right git-results-*.
+            os.chdir(workingDir or os.path.curdir)
 
 
         hasProgress = os.path.lexists('./git-results-progress')
@@ -554,39 +655,38 @@ def safeRollback(d):
             raise
 
 
-def setupExperiment(resultsDir, shouldCommit, tag, message):
+def setupExperiment(repoBase, resultsRoot, resultsLeaf, message):
     """Sets up the experiment skeleton and commits the git repo to an acceptable
     state.
+
+    resultsRoot is the directory containing results.
+
+    resultsLeaf is the rest of the experiment path, within resultsRoot.
 
     If message is unspecified, will prompt for a suitable message.
 
     Returns the directory for results (absolute path), dated symlink path (for
     rollback / updated), latest symlink path, and the commit tag to run.
     """
-    resultsBaseRelative = resultsDir
-    resultsDir = os.path.abspath(resultsDir)
-    if not os.path.lexists(os.path.join(resultsDir, ".git")):
-        curdir = os.getcwd()
+    resultsDir = os.path.abspath(os.path.join(repoBase, resultsRoot))
+    experimentDir = os.path.join(resultsDir, resultsLeaf)
+    if not os.path.lexists(os.path.join(resultsDir, ".gitignore")):
         safeMake(resultsDir)
-        os.chdir(resultsDir)
-        checked("git init")
-        os.chdir(curdir)
-
-    if not os.path.lexists("{0}/.gitignore".format(resultsDir)):
         # If we don't make a file, it looks like results is always ignored even
-        # though it isn't.  Luckily, we need a .gitignore anyway
+        # though it isn't.  So, make a sensible .gitignore to start if people
+        # want to revision their results.
         with open("{0}/.gitignore".format(resultsDir), 'w') as f:
             f.write("/.tmp\n")
 
     # Now that it's made, make sure it's ignored
-    ensureGitignore(resultsBaseRelative)
+    ensureGitignore(repoBase, resultsRoot)
 
     # Allow / encourage running same tag several times.  We'll use /1, /2, etc
     n = 1
-    if os.path.lexists(os.path.join(resultsBaseRelative, tag)):
+    if os.path.lexists(experimentDir):
         # Folder containing results under this tag exists.  Check both extant
         # folders and INDEX file to get next index.
-        for run in os.listdir(os.path.join(resultsBaseRelative, tag)):
+        for run in os.listdir(experimentDir):
             # Remove any suffixes
             run = run.split('-', 1)[0]
             try:
@@ -596,24 +696,29 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
                 # results.
                 pass
 
-        indexFile = os.path.join(resultsBaseRelative, tag, 'INDEX')
+        indexFile = os.path.join(experimentDir, 'INDEX')
         if os.path.lexists(indexFile):
             for nid in re.finditer(r'^(\d+) \((....)\)',
                     open(indexFile).read(), re.M):
                 # GONE experiments are no longer registered, so their numbers
-                # can be reused
+                # can be reused.  Trade-off is that the record will be
+                # overwritten.
                 if nid.group(2) != IndexStates.GONE:
                     n = max(n, int(nid.group(1)) + 1)
 
-    pureTag = tag
-    tagDir = os.path.join(resultsBaseRelative, tag + "/{0}".format(n))
-    tag = tag + "/{0}".format(n)
-    gitTag = "{0}/{1}".format(resultsBaseRelative, tag)
+    # the tag for this instance of the experiment
+    tag = "{0}/{1}/{2}".format(resultsRoot, resultsLeaf, n)
+    tagDir = os.path.join(experimentDir, "{0}".format(n))
 
     if message:
         cleanMessage = _escapeString(message)
     else:
-        message = _getStringViaEditor("git-results needs a commit message")
+        try:
+            _tag, _state, oldMessage = indexRead(tag)
+        except NotInIndexError:
+            oldMessage = ""
+        message = _getStringViaEditor("git-results needs a commit message",
+                default = oldMessage)
         if len(message) < 5 or message.startswith("Please replace"):
             raise ValueError("Commit message must be at least 5 "
                     "characters; got: '" + message + "'")
@@ -621,33 +726,18 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
 
     # Check the state of our git repo
     if checked("git status --porcelain").strip():
-        # Need to commit, if we can
-        if not shouldCommit:
-            sys.stderr.write("Repository has unsaved changes; use -c to commit "
-                    "automatically.\n")
-            sys.exit(1)
-
-        # Make sure git-results-build and git-results-run are ignored
-        gb = checked("git status git-results-build --porcelain --ignored")
-        if gb and not gb.startswith("!!"):
-            # Would be added.  Don't do that!
-            with open(".gitignore", "a") as f:
-                f.write("\n/git-results-build")
-        gb = checked("git status git-results-run --porcelain --ignored")
-        if gb and not gb.startswith("!!"):
-            # Same
-            with open(".gitignore", "a") as f:
-                f.write("\n/git-results-run")
-        gb = checked("git status git-results-progress --porcelain --ignored")
-        if gb and not gb.startswith("!!"):
-            # Same
-            with open(".gitignore", "a") as f:
-                f.write("\n/git-results-progress")
+        # Need to commit - make a branch for us
+        branch = "git-results"
+        # If the folder with git-results-run is not cwd, use that as an
+        # annotation for the branch.
+        pathToCur = os.path.relpath(os.path.dirname(resultsDir), repoBase)
+        if pathToCur != os.path.curdir:
+            branch += "-{}".format(pathToCur)
 
         # If this fails, the branch didn't exist or we're already on it, both
         # of which are fine
-        checked("git checkout -B git-results")
-        checked("git add -A .")
+        checked("git checkout -B {0}".format(branch))
+        checked("git add -A {0}".format(repoBase))
         checked('git commit -m "{0}"'.format(cleanMessage))
 
     curCommit = checked("git rev-parse HEAD").strip()
@@ -660,12 +750,7 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
     latestLinkAs = None
     try:
         # Ensure INDEX file
-        with open(os.path.join(resultsDir, pureTag, 'INDEX'), 'a') as f:
-            header = "{} ( run) - ".format(n)
-            wrapper = textwrap.TextWrapper(width = 79, initial_indent = '',
-                    subsequent_indent = '  ')
-            f.write(wrapper.fill(header + message))
-            f.write('\n')
+        indexWrite(tag, IndexStates.RUN, message)
 
         # Dated linkage
         now = datetime.datetime.now()
@@ -673,27 +758,26 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
                 now.strftime("%m"))
         safeMake(dated)
 
-        linkAs = os.path.join(dated, "{0}-{1}{2}".format(now.strftime("%d"), tag,
-                RUN_SUFFIX))
+        linkAs = os.path.join(dated, "{0}-{1}/{2}{3}".format(now.strftime("%d"),
+                resultsLeaf, n, RUN_SUFFIX))
         safeMake(os.path.dirname(linkAs))
-        parentLevel = 2 + len(tag.split('/'))
         os.symlink(os.path.relpath(tagDirRun, os.path.dirname(linkAs)), linkAs)
 
-        latestLinkAs = os.path.join(resultsDir, 'latest', pureTag + RUN_SUFFIX)
+        latestLinkAs = os.path.join(resultsDir, 'latest', resultsLeaf + RUN_SUFFIX)
         safeMake(os.path.dirname(latestLinkAs))
         for s in SUFFIXES:
-            linkPath = os.path.join(resultsDir, 'latest', pureTag + s)
+            linkPath = os.path.join(resultsDir, 'latest', resultsLeaf + s)
             if os.path.lexists(linkPath):
                 os.unlink(linkPath)
         os.symlink(os.path.relpath(tagDirRun, os.path.dirname(latestLinkAs)),
                 latestLinkAs)
 
         # Add our tag to the git repo
-        checked('git tag -a -m "{0}" {1}'.format(cleanMessage, gitTag))
+        checked('git tag -a -m "{0}" {1}'.format(cleanMessage, tag))
 
         # Write our message file
         with open(os.path.join(tagDirRun, "git-results-message"), "w") as f:
-            f.write("{0}\n{1}\n".format(gitTag, "=" * min(79, len(gitTag))))
+            f.write("{0}\n{1}\n".format(tag, "=" * min(79, len(tag))))
             if message:
                 f.write("{0}\n".format(message))
             f.write("\nCommit: {0}".format(curCommit))
@@ -706,23 +790,34 @@ def setupExperiment(resultsDir, shouldCommit, tag, message):
                 f.write(open('git-results-progress').read())
             f.write("\n\nStarted {0}".format(now.strftime("%Y-%m-%dT%H:%M:%S")))
     except:
-        safeRemoveDir(tagDirRun)
-        safeRollback(os.path.dirname(tagDirRun))
-        if linkAs is not None:
-            safeRemove(linkAs)
-            safeRollback(os.path.dirname(linkAs))
-        if latestLinkAs is not None:
-            safeRemove(latestLinkAs)
-            safeRollback(os.path.dirname(latestLinkAs))
-        checked('git tag -d "{0}"'.format(gitTag), nonZeroOk = [ 1 ])
-        indexExpunge(gitTag)
-        raise
+        err, typ, tb = sys.exc_info()
+        try:
+            safeRemoveDir(tagDirRun)
+            safeRollback(os.path.dirname(tagDirRun))
+            if linkAs is not None:
+                safeRemove(linkAs)
+                safeRollback(os.path.dirname(linkAs))
+            if latestLinkAs is not None:
+                safeRemove(latestLinkAs)
+                safeRollback(os.path.dirname(latestLinkAs))
+            checked('git tag -d "{0}"'.format(tag), nonZeroOk = [ 1 ])
+            indexExpunge(tag)
+        except:
+            traceback.print_exc()
+        raise err, typ, tb
 
-    return tagDirRun, linkAs, latestLinkAs, gitTag
+    return tagDirRun, linkAs, latestLinkAs, tag
 
 
-def checkTag(s):
-    """Takes a string s and returns it, if it is a tag."""
+def checkTag(s, allowExperimentInstance = None):
+    """Takes a string s and returns it, if it is a valid tag.  Validity is
+    assessed only AFTER the results root - that is, s should not be a full tag,
+    but only the part after the root.
+
+    allowExperimentInstances - If specified, must be list with one element.  Element
+        will be set to True if tag specifies experiment, or False if it is
+        a category.
+    """
     if re.search("^[a-zA-Z0-9_/\.-]+$", s) is None:
         raise ValueError("Tag must match regex [a-zA-Z0-9_/\.-]+")
     if s.startswith('dated'):
@@ -737,16 +832,12 @@ def checkTag(s):
         isInt = True
     except ValueError:
         pass
-    if isInt:
+
+    if allowExperimentInstance is not None:
+        allowExperimentInstance[0] = isInt
+    elif isInt:
         raise ValueError("Tag may not end in a number")
     return s
-
-
-def _checkGit():
-    """Raises Exception if cwd does not have a .git folder"""
-    if not os.path.isdir('.git'):
-        print("Must be used in a git directory!")
-        sys.exit(1)
 
 
 def _escapeString(st):
@@ -755,7 +846,7 @@ def _escapeString(st):
             ).replace("|", "\\|").replace("!", "\\!")
 
 
-def _getStringViaEditor(prompt = ""):
+def _getStringViaEditor(prompt = "", default = ""):
     """Gets a string by popping up an editor in the CLI; optionally presents
     a reason."""
     baseEditor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
@@ -768,7 +859,7 @@ def _getStringViaEditor(prompt = ""):
             text = True)
     try:
         f = os.fdopen(fd, "wt")
-        # f.write(contents)
+        f.write(default)
         f.close()
 
         if prompt and not IS_TEST:
@@ -784,42 +875,88 @@ def _getStringViaEditor(prompt = ""):
         os.unlink(name)
 
 
-def _processTagArgs(args, pathArg, dirArg, *tagArgs):
-    """Sort out -d and -p args with arbitrary number of tags.  args.dir is
-    populated with a list of directories corresponding with tags, in order.
+def _processTagArgs(args, *tagArgs, **kwargs):
+    """Sort out an  arbitrary number of tags.  Sets attribute tag_root with
+    the root results directory for the tag (e.g., the directory lower than
+    the one containing git-results-run), and the tag attribute itself to the
+    rest of the tag (the leaf).  The whole tag may be assembled as
+    '/'.join(tag_root, tag).
 
-    Also responsible for default dir of "results"
+    Also sets args.base with the abs path of the parent folder of current
+    working directory containing .git, which is used for the base of each
+    argument in tags.
+
+    Kwargs:
+    allowExperimentInstances - If True, allow individual numbered experiments if ALL
+            tag args are numbered.  Also sets "tagsAreInstances" on args object.
     """
-    if getattr(args, pathArg, None) and getattr(args, dirArg, None):
-        raise ArgumentError("-d and -p are incompatible")
+    allowExperimentInstances = kwargs.pop('allowExperimentInstances', False)
+    if kwargs:
+        raise ValueError("Bad kwargs: {}".format(kwargs))
 
-    oldDir = (getattr(args, dirArg) or "results").rstrip()
-    newDirs = []
+    # Find base
+    args.base = os.getcwd()
+    extraTagPath = []
+    while True:
+        if os.path.lexists(os.path.join(args.base, '.git')):
+            break
+        extraTagPath.insert(0, os.path.basename(args.base))
+        nbase = os.path.dirname(args.base)
+        if nbase == args.base:
+            raise ValueError("git-results must be executed from a git "
+                    "repository!")
+        args.base = nbase
 
+    # Sanitize tags, find roots
+    tagIsExp = [ None ]
+    if not allowExperimentInstances:
+        tagIsExp = None
+    lastWasExperiment = None
     for tagArg in tagArgs:
-        tag = getattr(args, tagArg)
-        if getattr(args, pathArg):
-            # Override dir and tag values given -p
-            path = tag
-            tag = ""
-            while True:
-                s = os.path.split(path)
-                if s[0]:
-                    if tag:
-                        tag = '/'.join([ s[1], tag ])
-                    else:
-                        tag = s[1]
-                    path = s[0]
-                else:
-                    newDirs.append(s[1])
-                    tag = tag.strip('/')
-                    break
-        else:
-            newDirs.append(oldDir)
-        checkTag(tag)
-        setattr(args, tagArg, tag)
+        tag = getattr(args, tagArg).rstrip('/')
+        if tag.startswith('/'):
+            raise ValueError("Tag may not be absolute path: {}".format(tag))
+        elif tag.startswith('-'):
+            raise ValueError("Path used by git-results cannot start with "
+                    "'-': {}".format(tag))
+        elif '//' in tag:
+            raise ValueError("Tag may not have empty element (//): {}".format(
+                    tag))
 
-    setattr(args, dirArg, newDirs)
+        tagRoot = '/'.join(extraTagPath + [ tag ])
+        tagLeaf = []
+        while tagRoot:
+            if os.path.lexists(os.path.join(os.path.dirname(tagRoot),
+                    'git-results-run')):
+                break
+
+            if '/' not in tagRoot:
+                tagRoot = None
+                break
+
+            tagRoot, nextLeaf = tagRoot.rsplit('/', 1)
+            tagLeaf.insert(0, nextLeaf)
+
+        if not tagRoot:
+            raise ValueError("git-results-run not found in tag path: {}".format(
+                    tag))
+        elif not tagLeaf:
+            raise ValueError(("No experiment name (child of results root '{}') "
+                    "found in: {}").format(tagRoot, tag))
+
+        checkTag('/'.join(tagLeaf), allowExperimentInstance = tagIsExp)
+        if tagIsExp is not None:
+            if lastWasExperiment is None:
+                lastWasExperiment = tagIsExp[0]
+            elif lastWasExperiment != tagIsExp[0]:
+                raise ValueError("Non-homogenous tags.  Must either all be "
+                        "instances of experiments, or all whole experiments.")
+        setattr(args, tagArg, '/'.join(tagLeaf))
+        setattr(args, '{}_root'.format(tagArg), tagRoot)
+
+    # Flag all tags as either experiments (individual) or folders
+    if tagIsExp is not None:
+        args.tagsAreInstances = lastWasExperiment
 
 
 def _auditMove(pathFrom, pathTo):
@@ -911,17 +1048,12 @@ class LatestTracker(object):
 def _runLink(args):
     ap = argparse.ArgumentParser(description = "Link one or more tagged "
             "results to a new location (which refers to the original).")
-    ap.add_argument("-p", "--path", action = 'store_true', help = "Same as -p "
-            "for normal git results calls; means that the paths specified "
-            "include the results directory as the first element.  Supercedes "
-            "-d.  Must match for both paths given.")
-    ap.add_argument("-d", "--dir", help = "Directory used to store results.")
     ap.add_argument("tag_from")
     ap.add_argument("tag_to")
     args = ap.parse_args(args)
-    _processTagArgs(args, "path", "dir", "tag_from", "tag_to")
-    pathFrom = '/'.join([ args.dir[0], args.tag_from ])
-    pathTo = '/'.join([ args.dir[1], args.tag_to ])
+    _processTagArgs(args, "tag_from", "tag_to", allowExperimentInstances = True)
+    pathFrom = '/'.join([ args.tag_from_root, args.tag_from ])
+    pathTo = '/'.join([ args.tag_to_root, args.tag_to ])
 
     matchingTags = _auditMove(pathFrom, pathTo)
 
@@ -943,21 +1075,18 @@ def _runLink(args):
 def _runMove(args):
     ap = argparse.ArgumentParser(description = "Move one or more tagged "
             "results to a different tag.")
-    ap.add_argument("-p", "--path", action = 'store_true', help = "Same as -p "
-            "for normal git results calls; means that the paths specified "
-            "include the results directory as the first element.  Supercedes "
-            "-d.  Must match for both paths given.")
-    ap.add_argument("-d", "--dir", help = "Directory used to store results.")
     ap.add_argument("tag_from")
     ap.add_argument("tag_to")
     args = ap.parse_args(args)
-    _processTagArgs(args, "path", "dir", "tag_from", "tag_to")
-    pathFrom = '/'.join([ args.dir[0], args.tag_from ])
-    pathTo = '/'.join([ args.dir[1], args.tag_to ])
+    # Fills args.tagsAreInstances
+    _processTagArgs(args, "tag_from", "tag_to",
+            allowExperimentInstances = True)
+    pathFrom = '/'.join([ args.tag_from_root, args.tag_from ])
+    pathTo = '/'.join([ args.tag_to_root, args.tag_to ])
 
     matchingTags = _auditMove(pathFrom, pathTo)
 
-    # tag path : [ Y, M, D ]
+    # { tag path : [ Y, M, D ] }
     tagDates = {}
     def walkDateDir(path, tag, dateInfo):
         if os.path.islink(path):
@@ -970,7 +1099,7 @@ def _runMove(args):
                 walkDateDir(os.path.join(path, p), '/'.join([ tag, p ]),
                         dateInfo)
 
-    dateBase = os.path.join(args.dir[0], 'dated')
+    dateBase = os.path.join(args.tag_from_root, 'dated')
     for year in os.listdir(dateBase):
         yearBase = os.path.join(dateBase, year)
         for month in os.listdir(yearBase):
@@ -978,7 +1107,7 @@ def _runMove(args):
             for dayHyphen in os.listdir(monthBase):
                 day, tagStart = dayHyphen.split('-', 1)
                 walkDateDir(os.path.join(monthBase, dayHyphen),
-                        '/'.join([ args.dir[0], tagStart ]),
+                        '/'.join([ args.tag_from_root, tagStart ]),
                         [ year, month, day ])
 
     # Everything seems OK, rename it all.  Start with all of the filesystem
@@ -986,7 +1115,9 @@ def _runMove(args):
     latestTracker = LatestTracker()
     for tagSrc, tagDest, dirSrc, dirDest, suffix in matchingTags:
         if os.path.lexists(dirSrc):
-            # This one hasn't been moved yet
+            # This one hasn't been moved yet.  Note that if
+            # args.tagsAreInstances is False, then this will ALSO move the
+            # INDEX!
             safeMake(os.path.dirname(dirDest))
             os.rename(dirSrc, dirDest)
             safeRollback(os.path.dirname(dirSrc))
@@ -997,16 +1128,23 @@ def _runMove(args):
         checked("git tag -d {0}".format(tagSrc))
         latestTracker.addTagDir(tagSrc + suffix, tagDest + suffix, suffix)
 
+        if args.tagsAreInstances:
+            # We need to update the INDEX file
+            _tag, _state, message = indexRead(tagSrc)
+            indexWrite(tagSrc, IndexStates.MOVE, "(moved to {}) {}".format(
+                    tagDest, message))
+            indexWrite(tagDest, _state, message)
+
         # We have to update any dated links...
         dateInfo = tagDates.get(tagSrc)
         if dateInfo:
             tagDirDest = tagDest + suffix
             sansResultDir = (tagSrc + suffix).split('/', 1)[1]
-            oldLink = os.path.join(args.dir[0], 'dated', dateInfo[0],
+            oldLink = os.path.join(args.tag_from_root, 'dated', dateInfo[0],
                     dateInfo[1], dateInfo[2] + '-' + sansResultDir)
             os.unlink(oldLink)
             safeRollback(os.path.dirname(oldLink))
-            targLink = os.path.join(args.dir[1], 'dated', dateInfo[0],
+            targLink = os.path.join(args.tag_to_root, 'dated', dateInfo[0],
                     dateInfo[1], dateInfo[2] + '-'
                     + tagDirDest.split('/', 1)[1])
             safeMake(os.path.dirname(targLink))
@@ -1094,10 +1232,8 @@ def _run(programArgs):
         programArgs = sys.argv[1:]
 
     if programArgs[0] == "move":
-        _checkGit()
         return _runMove(programArgs[1:])
     elif programArgs[0] == "link":
-        _checkGit()
         return _runLink(programArgs[1:])
     elif programArgs[0] == "supervisor":
         return _runSupervisor(programArgs[1:])
@@ -1105,22 +1241,11 @@ def _run(programArgs):
     ap = argparse.ArgumentParser(description = "A git extension for cataloging "
             "computation results.  Subcommands available: move, link, "
             "supervisor (e.g. git results move -h)")
-    ap.add_argument("-d", "--dir", help = "Directory used "
-            "to store results.  Automatically created and set up as a git "
-            "repo.  Also automatically added to .gitignore")
-    ap.add_argument("-p", "--path", action = 'store_true',
-            help = "Supercedes -d and normal default tag argument.  The first "
-                "path element in the tag argument becomes the results "
-                "directory, and the rest becomes the tag.  Useful for e.g. "
-                "tab completion in a console.")
     ap.add_argument("-i", "--in-place", action = 'store_true',
             help = "Do the build in place.  If you use this, you can't run "
                 "several simultaneous git results calls on the same repo.  "
                 "Recommended when you're trying to get a build working, or "
                 "testing short experiments, but not otherwise.")
-    ap.add_argument("-c", "--commit", action = 'store_true',
-            help = "If there are uncommitted changes, automatically commit "
-                "with the message as given.")
     ap.add_argument("-x", "--extra-file", action = 'append', default = [],
             help = "Of form path1:path2, where path1 is relative or absolute "
                 "to the current working directory, and path2 is relative to "
@@ -1166,10 +1291,10 @@ def _run(programArgs):
             "Uses the corresponding values saved in ~/.gitresults/[tagKey]/settings")
     ap.add_argument("tag", help = textwrap.dedent("""
             Path to organize these results under.  For instance, giving a tag of parity/squids
-            will create a git tag for the commit as results/parity/squids, and will create the
-            folders "parity" and subfolder "squids" to store the results in.  It is an error
-            to specify a tag that already exists.  "dated" is also an invalid option, as that is
-            a unique folder created by git-results to help with indexing results by date.
+            will create a git tag for the commit as parity/squids, and will create the
+            folders "parity" and subfolder "squids" to store the results in.
+            "dated" is an invalid option, as that is a unique folder created by
+            git-results to help with indexing results by date.
             "latest" is invalid as well, referring to another unique folder."""))
     args = ap.parse_args(programArgs)
 
@@ -1179,18 +1304,14 @@ def _run(programArgs):
                 .read())
     else:
         # Starting a new experiment
-        _checkGit()
-        args.cwd = os.getcwd()
-        _processTagArgs(args, "path", "dir", "tag")
-        # _processTagArgs sets args.dir to a list of directories.  For the main
-        # functionality, we only have one dir.
-        args.dir = args.dir[0]
+        _processTagArgs(args, "tag")
 
         if args.retry_until_stall:
-            if not os.path.isfile('git-results-progress'):
+            if not os.path.isfile(os.path.join(args.base,
+                    os.path.dirname(args.tag_root), 'git-results-progress')):
                 print(textwrap.dedent("""
                         To use git-results with the -r or --retry-until-stall flag, you must have
-                        a file named git-results-progress in your repository's root.  This file
+                        a file named git-results-progress next to your git-results-run.  This file
                         can output anything, but the final line of output must contain only a floating
                         point number, which monotonically increases as work progresses."""))
                 sys.exit(1)
@@ -1213,8 +1334,8 @@ def _run(programArgs):
             with open(getPathForResumeKey(retryKey, "settings"), 'w') as f:
                 f.write(pickle.dumps(args))
 
-    # Ensure we're in the right folder
-    os.chdir(args.cwd)
+    # Work in the parent of the results root, which has git-results-* files
+    os.chdir(os.path.join(args.base, os.path.dirname(args.tag_root)))
     if not os.path.isfile('git-results-build'):
         print(textwrap.dedent("""
                 To use git-results, two files are required: git-results-run and
@@ -1233,7 +1354,7 @@ def _run(programArgs):
     if not hasattr(args, 'setupInfo'):
         # Set up the experiment
         resultsDirRun, datedLinkRun, latestLinkRun, commitTag = setupExperiment(
-                args.dir, args.commit, args.tag, args.message)
+                args.base, args.tag_root, args.tag, args.message)
         if args.retry_until_stall:
             args.setupInfo = [ resultsDirRun, datedLinkRun, latestLinkRun,
                     commitTag ]
@@ -1260,10 +1381,10 @@ def _run(programArgs):
         if args.in_place:
             expDir = None
         else:
-            safeMake(os.path.join(args.dir, ".tmp"))
+            safeMake(os.path.join(args.tag_root, ".tmp"))
             if args.retry_until_stall:
                 # Use the retry key as the temporary folder
-                expDir = os.path.join(args.dir, ".tmp", args.retryKey)
+                expDir = os.path.join(args.tag_root, ".tmp", args.retryKey)
                 try:
                     # Make the dir, if it already exists that's OK
                     os.mkdir(expDir)
@@ -1276,7 +1397,7 @@ def _run(programArgs):
                     randName = "".join([
                             random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
                             for _ in range(8) ])
-                    expDir = os.path.join(args.dir, ".tmp", randName)
+                    expDir = os.path.join(args.tag_root, ".tmp", randName)
                     try:
                         os.mkdir(expDir)
                         break
@@ -1295,7 +1416,8 @@ def _run(programArgs):
                 raise
 
         try:
-            r, abrt = runExperiment(args, expDir, args.extra_file,
+            r, abrt = runExperiment(args, expDir,
+                    os.path.dirname(args.tag_root), args.extra_file,
                     resultsDirRun, commitTag, args.trim)
             if r != 0:
                 runFailed = True

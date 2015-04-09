@@ -29,7 +29,7 @@ class TestRetry(GrTest):
     def test_manualResume_corruptBuildState(self):
         self._setupRepo()
         with self.assertRaises(SystemExit):
-            git_results.run(shlex.split("test -cm a -r --retry-delay 0"))
+            git_results.run(shlex.split("results/test -m a -r --retry-delay 0"))
         key = open('results/test/1-run/git-results-retry-key').read()
         keyFolder = os.path.join(os.path.expanduser('~/.gitresults/'), key)
         with open(os.path.join(keyFolder, "build-state"), 'w') as f:
@@ -46,7 +46,7 @@ class TestRetry(GrTest):
             f.write("#! /usr/bin/env python2\n")
             f.write("raise Exception('Booo!')\n")
         with self.assertRaises(SystemExit):
-            git_results.run(shlex.split("test -cm a -r --retry-delay 0"))
+            git_results.run(shlex.split("results/test -m a -r --retry-delay 0"))
         key = open('results/test/1-run/git-results-retry-key').read()
         keyFolder = os.path.join(os.path.expanduser('~/.gitresults/'), key)
         # Switch cwd so that we ensure --internal-retry-continue works out of
@@ -74,7 +74,7 @@ class TestRetry(GrTest):
     def test_manualResume_ok(self):
         self._setupRepo()
         with self.assertRaises(SystemExit):
-            git_results.run(shlex.split("test -cm a -r --retry-delay 0"))
+            git_results.run(shlex.split("results/test -m a -r --retry-delay 0"))
         key = open('results/test/1-run/git-results-retry-key').read()
         keyFolder = os.path.join(os.path.expanduser('~/.gitresults/'), key)
         self.assertEqual(True, os.path.lexists(keyFolder))
@@ -119,7 +119,7 @@ class TestRetry(GrTest):
     def test_supervisorResume_ok(self):
         self._setupRepo()
         with self.assertRaises(SystemExit):
-            git_results.run(shlex.split("test -cm a -r --retry-delay 0"))
+            git_results.run(shlex.split("results/test -m a -r --retry-delay 0"))
         key = open('results/test/1-run/git-results-retry-key').read()
         keyFolder = os.path.join(os.path.expanduser('~/.gitresults/'), key)
         self.assertEqual(True, os.path.lexists(keyFolder))

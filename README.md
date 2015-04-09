@@ -145,6 +145,12 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2015-4-8 - Moving experiments works better now and updates index.  Build
+  failures preserve the old message.  -c and -p are no longer needed, as they
+  are implied.  git-results now recursively scans parents of a tag until it
+  finds a git-results-run, the sibling of which is the results directory (which
+  is checked in .gitignore, etc).  Prompts are given for updating .gitignore.
+  git-results-build and git-results-run are now version controlled.
 * 2015-2-26 - If a folder is deleted and experiments are run again, will
   correctly remove tags and folders from partially-created experiments.  
   Consults INDEX file for next index to allocate.

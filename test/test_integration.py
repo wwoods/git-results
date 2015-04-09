@@ -62,10 +62,11 @@ class TestGitResults(GrTest):
         with open("git-results-build", "w") as f:
             f.write("Fhgwgds")
         with self.assertRaises(SystemExit):
-            git_results.run(shlex.split("-c test/run -m 'Imma fail'"))
+            git_results.run(shlex.split("results/test/run -m 'Imma fail'"))
 
         self.assertEqual(None, checkTag("results/test/run/1"))
-        self.assertEqual(False, os.path.lexists("results/test"))
+        self.assertEqual(False, os.path.lexists("results/test/run/1"))
+        self.assertEqual(True, os.path.lexists("results/test/run/INDEX"))
         self.assertEqual(False, os.path.lexists("results/dated"))
         self.assertEqual(False, os.path.lexists("results/latest"))
         # Saved due to .gitignore
@@ -75,21 +76,23 @@ class TestGitResults(GrTest):
     def test_followCmd(self):
         # Ensure that the -f / --follow-cmd works
         self._setupRepo()
-        git_results.run(shlex.split("-c test/run -m 'Woo' -f 'echo yo>follow'"))
+        git_results.run(shlex.split("results/test/run -m 'Woo' -f 'echo yo>follow'"))
         self.assertEqual("yo\n", open('results/test/run/1/follow').read())
         with open('git-results-run', 'w') as f:
             f.write("heihaiwehfiaowhefoi")
         with self.assertRaises(SystemExit):
             git_results.run(shlex.split(
-                    "-c test/run -m 'Woo' -f 'echo yo>follow'"))
+                    "results/test/run -m 'Woo' -f 'echo yo>follow'"))
         self.assertEqual(False, os.path.lexists("results/test/run/2/follow"))
 
 
     def test_link(self):
         # Check linking
         self._setupRepo()
-        git_results.run(shlex.split("-c test/run -m 'Woo'"))
-        git_results.run(shlex.split("link test/run test/run2"))
+        git_results.run(shlex.split("results/test/run -m 'Woo'"))
+        with self.assertRaises(ValueError):
+            git_results.run(shlex.split("link test/run test/run2"))
+        git_results.run(shlex.split("link results/test/run results/test/run2"))
         self._assertTagMatchesMessage("results/test/run/1")
         self._assertTagMatchesMessage("results/test/run2/1")
         self.assertEqual(checkTag("results/test/run/1"),
@@ -104,8 +107,8 @@ class TestGitResults(GrTest):
             f.write("wihefiaheifwf")
 
         with self.assertRaises(SystemExit):
-            git_results.run(shlex.split("-c test/run -m 'Woo'"))
-        git_results.run(shlex.split("link test/run test/run3"))
+            git_results.run(shlex.split("results/test/run -m 'Woo'"))
+        git_results.run(shlex.split("link results/test/run results/test/run3"))
         self._assertTagMatchesMessage("results/test/run/2", "-fail")
         self._assertTagMatchesMessage("results/test/run3/2", "-fail")
         self.assertEqual("",
@@ -116,8 +119,8 @@ class TestGitResults(GrTest):
         # Check basic move case
         self._setupRepo()
         dateBase = self._getDatedBase()
-        git_results.run(shlex.split("-c test/run -m 'Woo'"))
-        git_results.run(shlex.split("move test/run test/trash/run2"))
+        git_results.run(shlex.split("results/test/run -m 'Woo'"))
+        git_results.run(shlex.split("move results/test/run results/test/trash/run2"))
         self.assertEqual(None, checkTag("results/test/run/1"))
         self._assertTagMatchesMessage("results/test/trash/run2/1")
         self.assertEqual(False, os.path.lexists("results/test/run"))
@@ -132,8 +135,32 @@ class TestGitResults(GrTest):
                 os.path.lexists('results/latest/test/trash/run2'))
 
         # Should allow running a new experiment at the moved tag
-        git_results.run(shlex.split("-c test/run -m 'Woooo'"))
+        git_results.run(shlex.split("results/test/run -m 'Woooo'"))
         self._assertTagMatchesMessage("results/test/run/1")
+
+
+    def test_moveExperiment(self):
+        # Accidentally ran a tag as another tag, move the experiment
+        self._setupRepo()
+        git_results.run(shlex.split("results/test/run -m Woo"))
+        git_results.run(shlex.split("move results/test/run/1 results/test/run2/1"))
+        dateBase = self._getDatedBase()
+        self.assertEqual(True, os.path.lexists("results/test/run"))
+        self.assertEqual(True, os.path.lexists("results/test/run/INDEX"))
+        self.assertEqual(False, os.path.lexists("results/test/run/1"))
+        self.assertEqual("1 (move) - (moved to results/test/run2/1) Woo\n",
+                open("results/test/run/INDEX").read())
+
+        self.assertEqual(True, os.path.lexists("results/test/run2/1"))
+        self.assertEqual(True, os.path.lexists("results/test/run2/INDEX"))
+        self.assertEqual("1 (  ok) - Woo\n",
+                open("results/test/run2/INDEX").read())
+
+        self.assertEqual(False, os.path.lexists(dateBase + '-test/run'))
+        self.assertEqual(True, os.path.lexists(dateBase + '-test/run2/1'))
+
+        self.assertEqual(False, os.path.lexists("results/latest/test/run"))
+        self.assertEqual(True, os.path.lexists("results/latest/test/run2"))
 
 
     def test_moveFail(self):
@@ -143,9 +170,9 @@ class TestGitResults(GrTest):
             f.write("hiwehfiahef")
         dateBase = self._getDatedBase()
         with self.assertRaises(SystemExit):
-            git_results.run(shlex.split("-c test/run -m 'woo'"))
+            git_results.run(shlex.split("results/test/run -m 'woo'"))
         try:
-            git_results.run(shlex.split("move test/run test/run2"))
+            git_results.run(shlex.split("move results/test/run results/test/run2"))
         except SystemExit, e:
             self.fail(str(e))
         self.assertEqual(False, os.path.lexists("results/test/run"))
@@ -155,15 +182,40 @@ class TestGitResults(GrTest):
 
 
     def test_moveSingle(self):
-        # Should fail to move an instance of a tag
+        # Should fail to move an instance of a tag in a mixed fashion (instance
+        # to instance, experiment to experiment)
         self._setupRepo()
-        git_results.run(shlex.split("-c test/run -m Woo"))
+        git_results.run(shlex.split("results/test/run -m Woo"))
         with self.assertRaises(ValueError):
-            git_results.run(shlex.split("move test/run/1 test/run2"))
+            git_results.run(shlex.split("move results/test/run/1 results/test/run2"))
         with self.assertRaises(ValueError):
-            git_results.run(shlex.split("move test/run test/run2/1"))
-        with self.assertRaises(ValueError):
-            git_results.run(shlex.split("move test/run/1 test/run2/1"))
+            git_results.run(shlex.split("move results/test/run results/test/run2/1"))
+
+
+    def test_multiple(self):
+        # Check multiple git-results-runs
+        self._setupRepo()
+        with open("git-results-run", "w") as f:
+            f.write("echo HMM")
+        os.makedirs("round2")
+        with open("round2/git-results-build", "w") as f:
+            pass
+        with open("round2/git-results-run", "w") as f:
+            f.write("echo ROUND2")
+        addExec("round2/git-results-build")
+        addExec("round2/git-results-run")
+
+        git_results.run(shlex.split("r/test -m 'Check this out'"))
+        git_results.run(shlex.split("round2/r/test -m 'Check that out'"))
+        try:
+            os.chdir("round2")
+            git_results.run(shlex.split("r/test -m 'Check us out'"))
+        finally:
+            os.chdir("..")
+
+        self._assertTagMatchesMessage("r/test/1")
+        self._assertTagMatchesMessage("round2/r/test/1")
+        self._assertTagMatchesMessage("round2/r/test/2")
 
 
     def test_noMessage(self):
@@ -175,27 +227,27 @@ class TestGitResults(GrTest):
             try:
                 # Replace editor with bunk editor
                 os.environ['EDITOR'] = 'ls > /dev/null'
-                git_results.run(shlex.split("-c test/run"))
+                git_results.run(shlex.split("results/test/run"))
             except ValueError, e:
                 self.assertEqual("Commit message must be at least 5 "
                         "characters; got: ''", str(e))
 
             try:
                 os.environ['EDITOR'] = 'echo "Comm" >'
-                git_results.run(shlex.split("-c test/run"))
+                git_results.run(shlex.split("results/test/run"))
             except ValueError, e:
                 self.assertEqual("Commit message must be at least 5 "
                         "characters; got: 'Comm'", str(e))
 
             os.environ['EDITOR'] = 'echo "Commt" >'
-            git_results.run(shlex.split("-c test/run"))
+            git_results.run(shlex.split("results/test/run"))
             self.assertEqual("Hello, world\n",
                     open("results/test/run/1/stdout").read())
 
             # If no commit is required, it should still prompt for a
             # message.
             os.environ['EDITOR'] = 'echo "Commz" >'
-            git_results.run(shlex.split("-c test/run2"))
+            git_results.run(shlex.split("results/test/run2"))
             self.assertEqual("Hello, world\n",
                     open("results/test/run2/1/stdout").read())
         except SystemExit, e:
@@ -219,27 +271,14 @@ class TestGitResults(GrTest):
         datedFolder = 'results/dated/{}/{}/{}-test/run'.format(
                 now.strftime("%Y"), now.strftime("%m"), now.strftime("%d"))
 
-        # The first commit here would want to commit since we haven't ignored
-        # files we should, so this should fail
-        with self.assertRaises(SystemExit):
-            git_results.run(shlex.split('test/run -m "Should fail"'))
-
-        self.assertEqual(None, checkTag("results/test/run/1"))
-
         # OK, now commit.
         try:
-            git_results.run(shlex.split('-c test/run -m "Let\'s see if it '
+            git_results.run(shlex.split('results/test/run -m "Let\'s see if it '
                     'prints"'))
         except SystemExit, e:
             self.fail(str(e))
 
         # Check that our commit properly ignored stuff
-        self.assertTrue(checked(
-                "git status --porcelain --ignored git-results-build")
-                .startswith("!!"))
-        self.assertTrue(checked(
-                "git status --porcelain --ignored git-results-run")
-                .startswith("!!"))
         self.assertTrue(checked(
                 "git status --porcelain --ignored results")
                 .startswith("!!"))
@@ -266,7 +305,7 @@ class TestGitResults(GrTest):
         with open("hello_world", "w") as f:
             f.write("ezeeeeecho 'Hello, world'")
         with self.assertRaises(SystemExit):
-            git_results.run(shlex.split('-c test/run -m "take 2"'))
+            git_results.run(shlex.split('results/test/run -m "take 2"'))
 
         def testFail(n):
             pth = "{}-fail".format(n)
@@ -288,9 +327,9 @@ class TestGitResults(GrTest):
         testFail(2)
         self.assertEqual(False, os.path.lexists('results/test/run/2'))
 
-        # Ensure that no -c flag works now that we have no changes
+        # One more just to see
         with self.assertRaises(SystemExit):
-            git_results.run(shlex.split('test/run -m "take 3"'))
+            git_results.run(shlex.split('results/test/run -m "take 3"'))
         testFail(3)
 
         self.assertEqual(
@@ -308,11 +347,11 @@ class TestGitResults(GrTest):
             f.write("Yay!")
         try:
             with self.assertRaises(SystemExit):
-                git_results.run(shlex.split("-c test/run -m 'h'"))
+                git_results.run(shlex.split("results/test/run -m 'h'"))
             git_results.run(shlex.split(
-                    "-c test/run -m 'h' -x someTestFile:sa"))
+                    "results/test/run -m 'h' -x someTestFile:sa"))
             git_results.run(shlex.split(
-                    "-c test/run -m 'h' --extra-file someTestFile:sa"))
+                    "results/test/run -m 'h' --extra-file someTestFile:sa"))
             self.assertEqual(True, os.path.lexists("results/test/run/1-fail"))
             self.assertEqual(False, os.path.lexists("results/test/run/1-fail/sa"))
             self.assertEqual(True, os.path.lexists("results/test/run/2/sa"))
@@ -327,10 +366,10 @@ class TestGitResults(GrTest):
     def test_continuation(self):
         # Ensure that the next run # is one higher than the greatest.
         self._setupRepo()
-        git_results.run(shlex.split("-c test/run -m 'h'"))
-        git_results.run(shlex.split("-c test/run -m 'h'"))
+        git_results.run(shlex.split("results/test/run -m 'h'"))
+        git_results.run(shlex.split("results/test/run -m 'h'"))
         shutil.rmtree("results/test/run/1")
-        git_results.run(shlex.split("-c test/run -m 'h'"))
+        git_results.run(shlex.split("results/test/run -m 'h'"))
         self.assertEqual(True, os.path.lexists("results/test/run/3"))
 
 
@@ -360,7 +399,7 @@ class TestGitResults(GrTest):
                 f.write("echo gee > cansas\n")
 
             with self.assertRaises(SystemExit):
-                git_results.run(shlex.split("-c test/run -m 'h'"))
+                git_results.run(shlex.split("results/test/run -m 'h'"))
 
             self.assertEqual(False, os.path.lexists("results/test/run/1"))
             self.assertEqual(True, os.path.lexists("results/test/run/1-fail"))
@@ -375,13 +414,14 @@ class TestGitResults(GrTest):
 
     def test_indexAbort(self):
         # Ensure that failed build (which deletes the tag), remains marked
-        # (gone) forever.
+        # (gone) forever.  Also ensure that next run gets the same message by
+        # default
         self._setupRepo()
-        git_results.run(shlex.split("-c test/run -m 'h'"))
+        git_results.run(shlex.split("results/test/run -m 'h'"))
         with open('git-results-build', 'w') as f:
             f.write("hehehihoweihfowhef")
         try:
-            git_results.run(shlex.split("-c test/run -m 'h1'"))
+            git_results.run(shlex.split("results/test/run -m 'h1'"))
             self.fail("Build didn't fail?")
         except SystemExit:
             pass
@@ -389,16 +429,45 @@ class TestGitResults(GrTest):
                 open('results/test/run/INDEX').read())
         with open('git-results-build', 'w') as f:
             f.write("cp hello_world hello_world_2")
-        git_results.run(shlex.split("-c test/run -m 'h2'"))
-        self.assertEqual("1 (  ok) - h\n2 (gone) - h1\n2 (  ok) - h2\n",
+        os.environ['EDITOR'] = 'echo ", now h2" >>'
+        git_results.run(shlex.split("results/test/run"))
+        self.assertEqual("1 (  ok) - h\n2 (  ok) - h1, now h2\n",
                 open('results/test/run/INDEX').read())
+
+
+    def test_indexUtils(self):
+        # Check index stuff
+        self._setupRepo()
+        def contents(f):
+            with open(f + '/INDEX') as fp:
+                return fp.read()
+        git_results.indexWrite("a/b/1", "move", "    Here is a message!    ")
+        self.assertEqual("1 (move) - Here is a message!\n", contents("a/b"))
+        self.assertEqual( ('1', 'move', 'Here is a message!'),
+                git_results.indexRead("a/b/1"))
+
+        git_results.indexWrite("a/b/2", "  ok", "I was ok")
+        self.assertEqual("1 (move) - Here is a message!\n2 (  ok) - I was ok\n",
+                contents("a/b"))
+        self.assertEqual( ('1', 'move', 'Here is a message!'),
+                git_results.indexRead("a/b/1"))
+        self.assertEqual( ('2', '  ok', 'I was ok'),
+                git_results.indexRead("a/b/2"))
+
+        git_results.indexWrite("a/b/1", "fail", "Here lies a longer message")
+        self.assertEqual("1 (fail) - Here lies a longer message\n2 (  ok) - I was ok\n",
+                contents("a/b"))
+        self.assertEqual( ('1', 'fail', 'Here lies a longer message'),
+                git_results.indexRead("a/b/1"))
+        self.assertEqual( ('2', '  ok', 'I was ok'),
+                git_results.indexRead("a/b/2"))
 
 
     def test_inPlace(self):
         # Ensure that in-place works
         self._setupRepo()
         try:
-            git_results.run(shlex.split("-cip wresults/in/place -m 'hmm'"))
+            git_results.run(shlex.split("-i wresults/in/place -m 'hmm'"))
         except SystemExit, e:
             self.fail(str(e))
 
@@ -423,17 +492,11 @@ class TestGitResults(GrTest):
 
         # -p flag should work
         try:
-            git_results.run(shlex.split('-cp qresults/test/run -m "Take 2"'))
+            git_results.run(shlex.split('qresults/test/run -m "Take 2"'))
         except SystemExit, e:
             self.fail(str(e))
 
         # Check that our commit properly ignored stuff
-        self.assertTrue(checked(
-                "git status --porcelain --ignored git-results-build")
-                .startswith("!!"))
-        self.assertTrue(checked(
-                "git status --porcelain --ignored git-results-run")
-                .startswith("!!"))
         self.assertTrue(checked(
                 "git status --porcelain --ignored qresults")
                 .startswith("!!"))
@@ -459,7 +522,7 @@ class TestGitResults(GrTest):
         checked("echo 'echo \"Hello, world\"' > git-results-run")
         checked("chmod a+x git-results-*")
         try:
-            git_results.run(shlex.split("-c test/run -m \"Let's see if it "
+            git_results.run(shlex.split("results/test/run -m \"Let's see if it "
                     "prints\""))
         except SystemExit, e:
             self.fail(str(e))
@@ -472,13 +535,13 @@ class TestGitResults(GrTest):
         # Ensure that the folder no longer exists
         self._setupRepo()
 
-        git_results.run(shlex.split('-cp results/test -m "take 1"'))
+        git_results.run(shlex.split('results/test -m "take 1"'))
         self.assertTrue(os.path.lexists("results/test/1"))
         # Note that the tag isn't deleted!
         shutil.rmtree("results")
 
         with self.assertRaises(Exception):
-            git_results.run(shlex.split('-cp results/test -m "take 2"'))
+            git_results.run(shlex.split('results/test -m "take 2"'))
         # Ensure our folder doesn't exist
         self.assertFalse(os.path.lexists("results/test/1"))
 
@@ -488,12 +551,12 @@ class TestGitResults(GrTest):
         # also the index
         self._setupRepo()
 
-        git_results.run(shlex.split('-cp results/test -m "take 1"'))
+        git_results.run(shlex.split('results/test -m "take 1"'))
         self.assertTrue(os.path.lexists("results/test/1"))
         shutil.rmtree("results/test/1")
-        git_results.run(shlex.split('-cp results/test -m "take 2"'))
+        git_results.run(shlex.split('results/test -m "take 2"'))
         self.assertTrue(os.path.lexists("results/test/2"))
         # Ensure multiline support works OK
         shutil.rmtree("results/test/2")
-        git_results.run(shlex.split('-cp results/test -m "take 3"'))
+        git_results.run(shlex.split('results/test -m "take 3"'))
         self.assertTrue(os.path.lexists("results/test/3"))
