@@ -145,6 +145,8 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2015-4-8 - If a new results directory will be created / added to .gitignore,
+  then the user is prompted to enter a string starting with y.
 * 2015-4-8 - Moving experiments works better now and updates index.  Build
   failures preserve the old message.  -c and -p are no longer needed, as they
   are implied.  git-results now recursively scans parents of a tag until it
