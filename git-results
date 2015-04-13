@@ -673,7 +673,7 @@ def setupExperiment(repoBase, resultsRoot, resultsLeaf, message):
     if not os.path.lexists(os.path.join(resultsDir, ".gitignore")):
         if not IS_TEST:
             r = raw_input(("To do this, git-results needs to make a new "
-                    "results directory:\n\n{0}\n\nin repository {1}.  It will "
+                    "results directory:\n\n{0}\n\nin repository {1}.\nIt will "
                     "also be added to the repository's .gitignore.  Is "
                     "this ok? (y/n) ").format(resultsRoot, repoBase))
             if not r.strip() or r.strip()[0].lower() != 'y':
@@ -933,7 +933,7 @@ def _processTagArgs(args, *tagArgs, **kwargs):
         tagRoot = '/'.join(extraTagPath + [ tag ])
         tagLeaf = []
         while tagRoot:
-            if os.path.lexists(os.path.join(os.path.dirname(tagRoot),
+            if os.path.lexists(os.path.join(args.base, os.path.dirname(tagRoot),
                     'git-results-run')):
                 break
 
