@@ -217,6 +217,14 @@ class TestGitResults(GrTest):
         self._assertTagMatchesMessage("round2/r/test/1")
         self._assertTagMatchesMessage("round2/r/test/2")
 
+        self.assertEqual(True, os.path.lexists("r/test/INDEX"))
+        self.assertEqual("1 (  ok) - Check this out\n", 
+                open("r/test/INDEX").read())
+        self.assertEqual(True, os.path.lexists("round2/r/test/INDEX"))
+        self.assertEqual("1 (  ok) - Check that out\n2 (  ok) - Check us out\n",
+                open("round2/r/test/INDEX").read())
+
+
 
     def test_noMessage(self):
         # Ensure it does not work without a message, and that only valid
@@ -441,26 +449,26 @@ class TestGitResults(GrTest):
         def contents(f):
             with open(f + '/INDEX') as fp:
                 return fp.read()
-        git_results.indexWrite("a/b/1", "move", "    Here is a message!    ")
+        git_results.indexWrite("", "a/b/1", "move", "    Here is a message!    ")
         self.assertEqual("1 (move) - Here is a message!\n", contents("a/b"))
         self.assertEqual( ('1', 'move', 'Here is a message!'),
-                git_results.indexRead("a/b/1"))
+                git_results.indexRead("", "a/b/1"))
 
-        git_results.indexWrite("a/b/2", "  ok", "I was ok")
+        git_results.indexWrite("", "a/b/2", "  ok", "I was ok")
         self.assertEqual("1 (move) - Here is a message!\n2 (  ok) - I was ok\n",
                 contents("a/b"))
         self.assertEqual( ('1', 'move', 'Here is a message!'),
-                git_results.indexRead("a/b/1"))
+                git_results.indexRead("", "a/b/1"))
         self.assertEqual( ('2', '  ok', 'I was ok'),
-                git_results.indexRead("a/b/2"))
+                git_results.indexRead("", "a/b/2"))
 
-        git_results.indexWrite("a/b/1", "fail", "Here lies a longer message")
+        git_results.indexWrite("", "a/b/1", "fail", "Here lies a longer message")
         self.assertEqual("1 (fail) - Here lies a longer message\n2 (  ok) - I was ok\n",
                 contents("a/b"))
         self.assertEqual( ('1', 'fail', 'Here lies a longer message'),
-                git_results.indexRead("a/b/1"))
+                git_results.indexRead("", "a/b/1"))
         self.assertEqual( ('2', '  ok', 'I was ok'),
-                git_results.indexRead("a/b/2"))
+                git_results.indexRead("", "a/b/2"))
 
 
     def test_inPlace(self):

@@ -215,38 +215,38 @@ def touch(fname):
         os.utime(fname, None)
 
 
-def index_splitTag(commitTag):
+def index_splitTag(repoBase, commitTag):
     """Splits (and validates) a commit tag into corresponding INDEX file and
     the experiment index within the file (as a string)."""
     if commitTag.startswith('/'):
         raise ValueError("Should not be an absolute path! {}".format(commitTag))
-    indexDir, exp = commitTag.rsplit('/', 1)
+    indexDir, exp = os.path.split(os.path.join(repoBase, commitTag))
     exp = exp.rsplit('-', 1)[0]
     try:
         int(exp)
     except ValueError:
         raise ValueError("Bad experiment number? {}".format(commitTag))
 
-    return (os.path.join(indexDir, 'INDEX'), exp)
+    return (os.path.join(repoBase, indexDir, 'INDEX'), exp)
 
 
-def indexExpunge(commitTag):
+def indexExpunge(repoBase, commitTag):
     """Marks the given commitTag as GONE, for e.g. build failures.  Never
     deletes INDEX, since that is where we save the commit message.  Which will
     be used for the next default.
     """
     # Update the index
-    indexUpdate(commitTag, IndexStates.GONE)
+    indexUpdate(repoBase, commitTag, IndexStates.GONE)
 
 
 class NotInIndexError(Exception):
     pass
 
 
-def indexRead(commitTag):
+def indexRead(repoBase, commitTag):
     """Returns (index, state, message) for given commitTag's entry in INDEX
     file.  Raises NotInIndexError if commitTag not found in INDEX."""
-    indexFile, exp = index_splitTag(commitTag)
+    indexFile, exp = index_splitTag(repoBase, commitTag)
     if not os.path.lexists(indexFile):
         raise NotInIndexError("Tag {} not found in INDEX (no INDEX)".format(
                 commitTag))
@@ -274,10 +274,10 @@ def indexRead(commitTag):
     return (exp, mState, contents[mStart:mEnd].strip())
 
 
-def indexWrite(commitTag, state, message):
+def indexWrite(repoBase, commitTag, state, message):
     """Overwrites (or appends) the record for commitTag to the corresponding
     INDEX file."""
-    indexFile, exp = index_splitTag(commitTag)
+    indexFile, exp = index_splitTag(repoBase, commitTag)
     safeMake(os.path.dirname(indexFile))
 
     # Generate our record.
@@ -312,12 +312,12 @@ def indexWrite(commitTag, state, message):
             f.write(''.join([ contents[:fStart], record, contents[fEnd:] ]))
 
 
-def indexUpdate(commitTag, state):
+def indexUpdate(repoBase, commitTag, state):
     """Given a commitTag from git (with or without suffix) and a new index
     state, update the (xxxx) portion of the INDEX file to reflect the given
     state.  Preserves the message.
     """
-    indexFile, exp = index_splitTag(commitTag)
+    indexFile, exp = index_splitTag(repoBase, commitTag)
     with open(indexFile, 'r+') as f:
         contents = f.read()
         lastMatch = None
@@ -721,7 +721,7 @@ def setupExperiment(repoBase, resultsRoot, resultsLeaf, message):
         cleanMessage = _escapeString(message)
     else:
         try:
-            _tag, _state, oldMessage = indexRead(tag)
+            _tag, _state, oldMessage = indexRead(repoBase, tag)
         except NotInIndexError:
             oldMessage = ""
         message = _getStringViaEditor("git-results needs a commit message",
@@ -757,7 +757,7 @@ def setupExperiment(repoBase, resultsRoot, resultsLeaf, message):
     latestLinkAs = None
     try:
         # Ensure INDEX file
-        indexWrite(tag, IndexStates.RUN, message)
+        indexWrite(repoBase, tag, IndexStates.RUN, message)
 
         # Dated linkage
         now = datetime.datetime.now()
@@ -808,7 +808,7 @@ def setupExperiment(repoBase, resultsRoot, resultsLeaf, message):
                 safeRemove(latestLinkAs)
                 safeRollback(os.path.dirname(latestLinkAs))
             checked('git tag -d "{0}"'.format(tag), nonZeroOk = [ 1 ])
-            indexExpunge(tag)
+            indexExpunge(repoBase, tag)
         except:
             traceback.print_exc()
         raise err, typ, tb
@@ -1137,10 +1137,10 @@ def _runMove(args):
 
         if args.tagsAreInstances:
             # We need to update the INDEX file
-            _tag, _state, message = indexRead(tagSrc)
-            indexWrite(tagSrc, IndexStates.MOVE, "(moved to {}) {}".format(
-                    tagDest, message))
-            indexWrite(tagDest, _state, message)
+            _tag, _state, message = indexRead(args.base, tagSrc)
+            indexWrite(args.base, tagSrc, IndexStates.MOVE,
+                    "(moved to {}) {}".format(tagDest, message))
+            indexWrite(args.base, tagDest, _state, message)
 
         # We have to update any dated links...
         dateInfo = tagDates.get(tagSrc)
@@ -1481,7 +1481,7 @@ def _run(programArgs):
             if e.errno != 2:
                 raise
         safeRemoveDir(resultsDirRun)
-        indexExpunge(commitTag)
+        indexExpunge(args.base, commitTag)
 
         if args.retry_until_stall:
             # Get rid of experiment entirely
@@ -1510,7 +1510,7 @@ def _run(programArgs):
     print("Moving {0} to {1}".format(resultsDirRun, resultsDirNew))
     os.rename(resultsDirRun, resultsDirNew)
 
-    indexUpdate(commitTag, indState)
+    indexUpdate(args.base, commitTag, indState)
 
     oldLink = os.readlink(datedLinkRun)
     os.unlink(datedLinkRun)
