@@ -650,8 +650,8 @@ def safeRollback(d):
     try:
         os.removedirs(d)
     except OSError, e:
-        # Directory not empty OR no such file or directory
-        if e.errno != 39 and e.errno != 2:
+        # Directory not empty OR no such file or directory (66 is mac os x)
+        if e.errno != 39 and e.errno != 2 and e.errno != 66:
             raise
 
 
