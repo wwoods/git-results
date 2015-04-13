@@ -1388,10 +1388,11 @@ def _run(programArgs):
         if args.in_place:
             expDir = None
         else:
-            safeMake(os.path.join(args.tag_root, ".tmp"))
+            safeMake(os.path.join(args.base, args.tag_root, ".tmp"))
             if args.retry_until_stall:
                 # Use the retry key as the temporary folder
-                expDir = os.path.join(args.tag_root, ".tmp", args.retryKey)
+                expDir = os.path.join(args.base, args.tag_root, ".tmp", 
+                        args.retryKey)
                 try:
                     # Make the dir, if it already exists that's OK
                     os.mkdir(expDir)
@@ -1404,7 +1405,8 @@ def _run(programArgs):
                     randName = "".join([
                             random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
                             for _ in range(8) ])
-                    expDir = os.path.join(args.tag_root, ".tmp", randName)
+                    expDir = os.path.join(args.base, args.tag_root, ".tmp", 
+                            randName)
                     try:
                         os.mkdir(expDir)
                         break
