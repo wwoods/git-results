@@ -213,6 +213,8 @@ class TestGitResults(GrTest):
         finally:
             os.chdir("..")
 
+        self.assertEqual("\n/r\n/round2/r", open(".gitignore").read())
+
         self._assertTagMatchesMessage("r/test/1")
         self._assertTagMatchesMessage("round2/r/test/1")
         self._assertTagMatchesMessage("round2/r/test/2")

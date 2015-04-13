@@ -177,8 +177,8 @@ def copySymlinks(frm, to):
 
 
 def ensureGitignore(repoBase, resultsRoot):
-    if not checked("git status {0}/.gitignore --porcelain --ignored".format(
-            resultsRoot)).startswith("!!"):
+    if not checked("git status {0}/{1}/.gitignore --porcelain --ignored".format(
+            repoBase, resultsRoot)).startswith("!!"):
         with open(os.path.join(repoBase, '.gitignore'), 'a') as f:
             f.write("\n/{0}".format(resultsRoot))
 
