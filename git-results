@@ -1166,8 +1166,9 @@ def _runSupervisor(args):
     ap = argparse.ArgumentParser("Designed to be put in crontab (or some other "
             "scheduler).  Retries experiments started with --retry-until-stall "
             "or -r if they are no longer running.")
+    ap.add_argument("-v", "--verbose", action = 'store_true')
     args = ap.parse_args(args)
-    retryDir = os.path.expanduser("~/.gitresults")
+    retryDir = os.path.join(os.path.expanduser("~"), ".gitresults")
 
     exps = os.path.lexists(retryDir) and os.listdir(retryDir) or []
 
@@ -1179,6 +1180,13 @@ def _runSupervisor(args):
         isTestKey = retryKey.startswith("rtest")
         if isTestKey and not IS_TEST or not isTestKey and IS_TEST:
             continue
+        if not retryKey.startswith("r"):
+            # Bad, archived experiment
+            continue
+
+        def deleteExp(reason):
+            print("Deleting experiment {}: {}".format(retryKey, reason))
+            shutil.rmtree(getPathForResumeKey(retryKey))
 
         if not os.path.lexists(getPathForResumeKey(retryKey, "settings")):
             # OK, the settings file doesn't even exist.  If it still doesn't in
@@ -1186,9 +1194,7 @@ def _runSupervisor(args):
             # experiment.
             time.sleep(1.0)
             if not os.path.lexists(getPathForResumeKey(retryKey, "settings")):
-                print("Deleting experiment {}, failed to reach settings".format(
-                        retryKey))
-                shutil.rmtree(getPathForResumeKey(retryKey))
+                deleteExp("settings file does not exist")
                 continue
 
         # If we reach here, there are settings to be checked and respected
@@ -1196,13 +1202,31 @@ def _runSupervisor(args):
             expArgs = pickle.loads(open(getPathForResumeKey(retryKey, "settings"))
                     .read())
         except pickle.UnpicklingError:
-            print("Corrupt experiment {}, unpickle of settings failed".format(
-                    retryKey))
+            newDir = getPathForResumeKey("bad_" + retryKey)
+            print("Corrupt experiment {}, unpickle of settings failed.  Moving "
+                    "to {}".format(
+                        retryKey, newDir))
+            if os.path.lexists(newDir):
+                shutil.rmtree(newDir)
+            os.rename(getPathForResumeKey(retryKey), newDir)
             continue
         expMtime = os.path.getmtime(getPathForResumeKey(retryKey, "settings"))
         if os.path.lexists(getPathForResumeKey(retryKey, "heartbeat")):
             expMtime = os.path.getmtime(getPathForResumeKey(retryKey,
                     "heartbeat"))
+
+        # Ensure that the experiment directory still exists
+        if not hasattr(expArgs, 'base'):
+            deleteExp("Old version, no 'base' folder found")
+            continue
+        if not os.path.lexists(expArgs.base):
+            deleteExp(".git folder containing experiment no longer exists: {}"
+                    .format(expArgs.base))
+            continue
+        if not os.path.lexists(expArgs.setupInfo[0]):
+            deleteExp("Results directory no longer exists: {}".format(
+                    expArgs.setupInfo[0]))
+            continue
 
         # Note - we allow a 1 second offset since file system times are rounded,
         # which can cause us issues.
@@ -1219,8 +1243,10 @@ def _runSupervisor(args):
             iothreads = [ tee(p.stdout, sys.stdout),
                     tee(p.stderr, sys.stderr) ]
             allStarted.append(p)
-    print("Supervisor finished; {} '-r' experiments restarted".format(
-            startedCount))
+
+    if args.verbose:
+        print("Supervisor finished; {} '-r' experiments restarted".format(
+                startedCount))
     return allStarted
 
 
@@ -1391,7 +1417,7 @@ def _run(programArgs):
             safeMake(os.path.join(args.base, args.tag_root, ".tmp"))
             if args.retry_until_stall:
                 # Use the retry key as the temporary folder
-                expDir = os.path.join(args.base, args.tag_root, ".tmp", 
+                expDir = os.path.join(args.base, args.tag_root, ".tmp",
                         args.retryKey)
                 try:
                     # Make the dir, if it already exists that's OK
@@ -1405,7 +1431,7 @@ def _run(programArgs):
                     randName = "".join([
                             random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
                             for _ in range(8) ])
-                    expDir = os.path.join(args.base, args.tag_root, ".tmp", 
+                    expDir = os.path.join(args.base, args.tag_root, ".tmp",
                             randName)
                     try:
                         os.mkdir(expDir)

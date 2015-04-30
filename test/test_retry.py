@@ -105,15 +105,17 @@ class TestRetry(GrTest):
 
     def test_supervisorIgnoreCorrupt(self):
         rottenExperiment = os.path.expanduser("~/.gitresults/rtestBlahTest")
+        archiveExperiment = os.path.expanduser("~/.gitresults/bad_rtestBlahTest")
         if os.path.lexists(rottenExperiment):
             shutil.rmtree(rottenExperiment)
         os.mkdir(rottenExperiment)
         with open(os.path.join(rottenExperiment, "settings"), 'w') as f:
             f.write("Yhawehf")
-        # Will crash if it's not ignored
+        # Bad settings file, should get moved to bad_
         git_results._runSupervisor([])
-        self.assertEqual(True, os.path.exists(rottenExperiment))
-        shutil.rmtree(rottenExperiment)
+        self.assertEqual(False, os.path.exists(rottenExperiment))
+        self.assertEqual(True, os.path.exists(archiveExperiment))
+        shutil.rmtree(archiveExperiment)
 
 
     def test_supervisorResume_ok(self):

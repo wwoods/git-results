@@ -1,116 +1,106 @@
 git-results
 ===========
 
-A helper script / git extension for cataloging computation results
+A helper script / git extension for cataloguing computation results
 
-Usage
------
+## Installation
 
-Put git-results somewhere on your PATH.  Then from a git repository, type:
+Put git-results somewhere on your PATH.  Proper setup can be verified by
+running:
 
     git results -h
 
 to show the tool's help.
 
-At a bare minimum, you need two files in the base of your repository:
-git-results-build and git-results-run.  These will not be committed,
-and must be executable.  Build and run separation is important because
-git-results automatically detects output files for you, and needs to distinguish
-between files built as part of the build process and files generated at runtime.
-The build step being in git-results is important for repeatability.  Though
-these files aren't committed in your repo, their contents are archived in the
-git-results-message file in the results folder.
+## Usage
 
-Simplest scenario:
+`git-results` is a tool for organizing and bookmarking experiments locally, so that the exact conditions for each experiment can be remembered and compared intuitively and authoritatively.  In its most basic mode, running `git-results` executes the following steps:
 
-    $ git init
-    $ touch git-results-build
-    $ echo "echo 'Hello, world'" > git-results-run
-    $ chmod a+x git-results-*
+1. Switch to a temporary branch,
+* Add all local source changes, and create a commit on the temporary branch with all of your code changes,
+* Clone that commit to a temporary folder,
+* Execute `git-results-build` within that folder,
+* Snapshot the folder's contents,
+* Execute `git-results-run` within that folder,
+* Diff the folder's contents against the original snapshot, moving any new files
+  to the specified results directory.
 
-    ## -c means it is OK for git results to commit to its own branch.  It will
-    ## still make changes to your local tree, but throw an error rather than
-    ## commit on its own without -c.
-    $ git results -c test/run -m "Let's see if it prints hello, world"
-    Building results/test/run/1 in results/tmp/PP3C3DTC...
-    Running results/test/run/1 in results/tmp/PP3C3DTC...
-    ================================================================================
-    ================================================================================
-    Hello, world
-    ================================================================================
-    ================================================================================
-    Copying results to results/test/run/1...
-    OK
+A basic invocation of `git-results` looks like this:
 
-So, what happened there?  git-results created a tag, built your project, ran it,
-and tidied all of the output files into a folder for you.  Neat, huh?
+    $ git results results/my/experiment
 
-Note that it might be easier in e.g. a console to use the -p flag:
-
-    $ git results -cp results/test/run -m "Let's see..."
-
-The -p flag means that the first part of the path is the directory to store
-results in.  Without -p this defaults to "results", which can be useful, but
-paths do not tab-complete in a console.
-
-For a little more detail, git-results tagged the head commit of your repository
-with results/test/run/1 (note test/run comes from our argument; results is the
-output folder, and 1 is the instance of this tag being run).  It then checked
-out this tag to a temporary folder in order to guarantee build stability and
-let you make other changes / start other tests in parallel.  It runs your
-git-results-build script, takes a snapshot of the filesystem (only tests
-existence, not contents), and then runs your git-results-run command.  The
-output of git-results-run is duplicated in the terminal, and also into the
-results folder into two files, stdout and stderr.  There is also a
-git-results-message file in the results folder, containing the following
-information:
-
-    Let's see if it prints hello, world
-
-    Commit: 91aa84e834c3ee6543161b34a95a5478c7ae77f3
-
-    git-results-run
-    ---------------
-    ./hello_world
+This will open your favorite text editor (via environment variables `VISUAL` or `EDITOR`, or fallback to `vi`) and prompt for a message further describing the experiment.  After that, `git-results` will do its thing, moving any results files to `results/my/experiment/1` where they are archived.  Note the `/1` at the end of the path!  Every experiment ran through `git-results` is versioned, assisting with iterative development of a single experiment.
 
 
-    git-results-build
-    -----------------
+## Special Files
+
+`git-results` relies on a few special files in your repository; these files define behaviors and parameters specific to your application.
+
+### `git-results-build`
+is a required file that describes what steps are required to build your project - this is separated from `git-results-run` so that e.g. compile errors can be separated from runtime errors.  This file also helps to separate any intermediate files created as a part of the build process from viable results that should be archived.
+
+### `git-results-run`
+is a required file describing what needs to be run to produce output files that need to be recorded.
+
+### `git-results-progress`
+is an optional file that should look at the project's current state and return a single, monotonically increasing, floating-point number that describes how far along a process is.  This file is required only for the `-r` flag, which flags an experiment as retry-able on events such as failure or sudden system shutdown.  
+
+Typically, this file might amount to checking the timestamp on a checkpoint file; if the checkpoint file does not get updated, then the process is not progressing and it's possible that a non-transient error is impeding progress.  For example, on a Linux system, this file might contain:
+
+    stat -c %Y my_checkpoint.chkpt 2>/dev/null || echo -1
+
+If you wish to use `git-results -r` experiments, then note that you will need to run `git results supervisor` in your crontab or equivalent, to periodically check if any experiments need to be restarted.
 
 
-    OK after 0.0212290287018s
-    Build took 0.0212380886078s
+## What does `git-results` put in the output folder and the folders above it?
 
-This includes all essential information about our test - the message you entered
-as a comment, the commit hash, the contents of your run and build scripts,
-whether the test was successful or not (OK would be FAIL if it had failed),
-and how long it took to run the run and build scripts.
+### Meta information
+If your `git-results-run` file lives at `project/git-results-run` relative to your git repository root, then executing an experiment from the `project` folder as `git results results/a` does the following:
 
-Subsequent runs of the same command would create results/test/run/2,
-results/test/run/3, etc.
+1. Establishes a results root in `project/results`.
 
-Footnote on copying before building - if one of the files
-in your repo were your test parameters, which is what this system is more or
-less designed for at the moment, changing it could alter your running test if
-builds were in-place).
+ The results root is the folder one deeper than the folder containing `git-results-run`; in this example, `project` contains `git-results-run`, so that folder is the results root.  If this folder is not already treated as a results root, then `git-results` will prompt for confirmation of result root creation.  Results roots are automatically added to the git repository's `.gitignore`. 
+
+* Creates a versioned instance of the experiment named `a` in the results root `project/results`.
+
+ Most experiments need to be iteratively refined; `git-results` helps you to manage this by automatically creating subfolders `1`, `2`, etc. for your experiments.  When an experiment completes successfully, these folders will not have a suffix.  However, if they are still running, or `git-results-run` returns non-zero (failure), then these subfolders will be renamed to reflect the experiment's ultimate status (`1-run`, or `1-fail`).
+
+* Adds the experiment version to the `INDEX` file.
+
+ Each experiment directory gets a special `INDEX` file that correlates the number of the experiment to the message that was typed in when it was executed.
+
+* In the results root, symlinks `latest/experiment` to the last-run version.
+* Creates a link to the experiment version in the `dated` folder of the results root, with the same name and version as the experiment but prefixed with today's date. E.g., `dated/2015/04/13-your/experiment/here/1`
+
+Note that these steps are identical and the results will be the same as if `git results project/results/a` had been run from the git root.  `git-results` always stores information relative to the results root, calculated based on where `git-results-run` last occurs in the specified path.
+
+### Experiment results
+The versioned experiment folder will contain the following:
+
+* stdout
+* stderr
+* A meta-information file git-results-message, containing:
+    * The git tag that marks the experiment
+    * The message entered when the experiment was ran
+    * The contents of `git-results-run` and `git-results-build` (and, if it exists, `git-results-progress`
+    * The starting timestamp, total duration, and whether or not the program exited successfully.
+* Any files created during the execution of `git-results-run`
+
+
+(can also be executed as `git results project/results/a` from the git root; the path to `git-results-run` determines the working directory)
+
+
+## Comparing code from two experiments
+
+    git diff path/to/results/experiment/version path/toresults/other/version --
+
+Note the `--` at the end - without this, git doesn't know what to do.
 
 
 Resuming / Re-Entrant git-results-run files
 -------------------------------------------
 
-If your application can resume itself in event of a power outage or other transient
-failure, git-results provides the -r or --retry-until-stall flag which instructs
-git-results to try executing an experiment repeatedly until it finishes.
-
-This technique requires an extra file: git-results-progress.  This file may have
-any output, but its final line must be a non-decreasing floating point value that
-is indicative of progress.  For instance, if you have a log or output file that
-your application writes as progress occurs, then the modification time of that
-log file would work great (stat -c %Y results.csv).
-
-Additionally, "git results supervisor" needs to be in your crontab or some
-other scheduler to run every minute or so.  This command scans for unresponsive
-trials and starts them again.
+Check out `git-results-progress` above.
 
 
 Special Directories
@@ -145,6 +135,12 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2015-4-13 - git-results now respects multiple results folders in a single
+  directory, and each can have their own git-results-run and git-results-build.
+  These files are also no longer .gitignored.
+
+  Supervisor now deletes experiments whose folder no longer exists; its
+  output can be appended to a log file, and the log file won't get too big.
 * 2015-4-8 - If a new results directory will be created / added to .gitignore,
   then the user is prompted to enter a string starting with y.
 * 2015-4-8 - Moving experiments works better now and updates index.  Build
