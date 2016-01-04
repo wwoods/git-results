@@ -966,7 +966,7 @@ def _processTagArgs(args, *tagArgs, **kwargs):
         args.tagsAreInstances = lastWasExperiment
 
 
-def _auditMove(pathFrom, pathTo):
+def _auditMove(base, pathFrom, pathTo):
     """Audits that the given matchingTags can be moved from pathFrom to pathTo
     without collisions.
 
@@ -986,17 +986,20 @@ def _auditMove(pathFrom, pathTo):
         # Check that the source folder exists, not just the tag in git
         suffix = None
         for s in SUFFIXES:
-            if os.path.lexists(src + s):
+            if os.path.lexists(os.path.join(base, src + s)):
                 if s == "-run":
-                    sys.stderr.write("Cannot move/link tag that is running: {0}"
+                    sys.stderr.write(
+                            "Cannot move/link tag that is running: {0}\n"
                             .format(src))
                     sys.exit(1)
                 suffix = s
                 break
 
         if suffix is None:
-            sys.stderr.write("Cannot find data for {0}".format(src))
-        matchingTags.append(( src, dest, pathFrom, pathTo, suffix ))
+            sys.stderr.write("Cannot find data for {0}\n".format(src))
+            sys.exit(1)
+        matchingTags.append(( src, dest, os.path.join(base, pathFrom),
+                os.path.join(base, pathTo), suffix ))
 
         # Check that the destination doesn't exist
         existingForms = []
@@ -1006,7 +1009,7 @@ def _auditMove(pathFrom, pathTo):
             if os.path.lexists(dest + s):
                 existingForms.append("filesystem" + s)
         if existingForms:
-            sys.stderr.write("Destination tag {0} exists ({1})".format(
+            sys.stderr.write("Destination tag {0} exists ({1})\n".format(
                     dest, ', '.join(existingForms)))
             sys.exit(1)
 
@@ -1062,7 +1065,7 @@ def _runLink(args):
     pathFrom = '/'.join([ args.tag_from_root, args.tag_from ])
     pathTo = '/'.join([ args.tag_to_root, args.tag_to ])
 
-    matchingTags = _auditMove(pathFrom, pathTo)
+    matchingTags = _auditMove(args.base, pathFrom, pathTo)
 
     # Do the links
     latestTracker = LatestTracker()
@@ -1091,7 +1094,7 @@ def _runMove(args):
     pathFrom = '/'.join([ args.tag_from_root, args.tag_from ])
     pathTo = '/'.join([ args.tag_to_root, args.tag_to ])
 
-    matchingTags = _auditMove(pathFrom, pathTo)
+    matchingTags = _auditMove(args.base, pathFrom, pathTo)
 
     # { tag path : [ Y, M, D ] }
     tagDates = {}
@@ -1106,7 +1109,7 @@ def _runMove(args):
                 walkDateDir(os.path.join(path, p), '/'.join([ tag, p ]),
                         dateInfo)
 
-    dateBase = os.path.join(args.tag_from_root, 'dated')
+    dateBase = os.path.join(args.base, args.tag_from_root, 'dated')
     for year in os.listdir(dateBase):
         yearBase = os.path.join(dateBase, year)
         for month in os.listdir(yearBase):
@@ -1145,15 +1148,21 @@ def _runMove(args):
         # We have to update any dated links...
         dateInfo = tagDates.get(tagSrc)
         if dateInfo:
+            # Note that dated directories do not include the results root
             tagDirDest = tagDest + suffix
-            sansResultDir = (tagSrc + suffix).split('/', 1)[1]
-            oldLink = os.path.join(args.tag_from_root, 'dated', dateInfo[0],
-                    dateInfo[1], dateInfo[2] + '-' + sansResultDir)
+            def getTagSansResults(d):
+                if not d.startswith(args.tag_from_root + "/"):
+                    raise ValueError("Bad path? {0}".format(d))
+                return d[len(args.tag_from_root)+1:]
+            sansResultDir = getTagSansResults(tagSrc + suffix)
+            oldLink = os.path.join(args.base, args.tag_from_root, 'dated',
+                    dateInfo[0], dateInfo[1],
+                    dateInfo[2] + '-' + sansResultDir)
             os.unlink(oldLink)
             safeRollback(os.path.dirname(oldLink))
             targLink = os.path.join(args.tag_to_root, 'dated', dateInfo[0],
                     dateInfo[1], dateInfo[2] + '-'
-                    + tagDirDest.split('/', 1)[1])
+                    + getTagSansResults(tagDirDest))
             safeMake(os.path.dirname(targLink))
             os.symlink(os.path.relpath(tagDirDest, os.path.dirname(targLink)),
                     targLink)

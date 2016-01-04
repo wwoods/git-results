@@ -135,6 +135,7 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2016-1-4 - Fixed git-results move for sub-results folders.
 * 2015-4-13 - git-results now respects multiple results folders in a single
   directory, and each can have their own git-results-run and git-results-build.
   These files are also no longer .gitignored.

@@ -192,6 +192,55 @@ class TestGitResults(GrTest):
             git_results.run(shlex.split("move results/test/run results/test/run2/1"))
 
 
+    def test_moveSub(self):
+        # Moving a sub-results folder should work alright
+        self._setupRepo()
+        os.makedirs("round2")
+        with open("round2/git-results-build", "w") as f:
+            pass
+        with open("round2/git-results-run", "w") as f:
+            f.write("echo ROUND2")
+        addExec("round2/git-results-build")
+        addExec("round2/git-results-run")
+        git_results.run(shlex.split("round2/results/test/run1 -m Woo1"))
+        git_results.run(shlex.split("round2/results/test/run2 -m Woo2"))
+        git_results.run(shlex.split("round2/results/test/run3 -m Woo3"))
+
+        # Move from repo root
+        git_results.run(shlex.split("move round2/results/test/run2/1 round2/results/test/run1/2"))
+
+        os.chdir("round2")
+        # Can't overwrite existing
+        with self.assertRaises(SystemExit):
+            git_results.run(shlex.split("move results/test/run3/1 results/test/run1/2"))
+        print("Now doing OK move...")
+        git_results.run(shlex.split("move results/test/run3/1 results/test/run1/3"))
+        os.chdir("..")
+
+        self._assertTagMatchesMessage("round2/results/test/run1/1")
+        self._assertTagMatchesMessage("round2/results/test/run1/2")
+        self._assertTagMatchesMessage("round2/results/test/run1/3")
+
+        ex = [ "run1/1", "run1/2", "run1/3", "run2/INDEX", "run3/INDEX" ]
+        noex = [ "run2/1", "run3/1" ]
+        for path in ex:
+            print("Testing existence of {0}".format(path))
+            self.assertTrue(os.path.lexists("round2/results/test/" + path))
+        for path in noex:
+            print("Testing absence of {0}".format(path))
+            self.assertFalse(os.path.lexists("round2/results/test/" + path))
+
+        mainIndex = "1 (  ok) - Woo1\n2 (  ok) - Woo2\n3 (  ok) - Woo3\n"
+        self.assertEqual(mainIndex,
+                open("round2/results/test/run1/INDEX").read())
+        otherIndex = "1 (move) - (moved to round2/results/test/run1/2) Woo2\n"
+        self.assertEqual(otherIndex,
+                open("round2/results/test/run2/INDEX").read())
+        otherIndex = "1 (move) - (moved to round2/results/test/run1/3) Woo3\n"
+        self.assertEqual(otherIndex,
+                open("round2/results/test/run3/INDEX").read())
+
+
     def test_multiple(self):
         # Check multiple git-results-runs
         self._setupRepo()
