@@ -86,6 +86,38 @@ class TestGitResults(GrTest):
         self.assertEqual(False, os.path.lexists("results/test/run/2/follow"))
 
 
+    def test_gitGetsTag(self):
+        # Ensure that git-results-build and git-results-run both get the tag
+        # so they can do something with it
+        self._setupRepo()
+        with open('git-results-build', 'w') as f:
+            f.write(r"""#! /bin/bash
+                    set -e
+                    echo "Building as $1"
+                    if [[ $1 =~ $(echo '\bt1\b') ]]; then
+                        echo "t1" > build_pre
+                    else
+                        echo "other" > build_pre
+                    fi""")
+        with open('git-results-run', 'w') as f:
+            f.write(r"""#! /bin/bash
+                    set -e
+                    mv build_pre build_post
+                    if [[ $1 =~ $(echo '\bt1\b') ]]; then
+                        echo "t1" > run
+                    else
+                        echo "other" > run
+                    fi""")
+
+        git_results.run(shlex.split("results/t1 -m 't1'"))
+        git_results.run(shlex.split("results/t2 -m 't2'"))
+
+        self.assertEqual("t1\n", open("results/t1/1/build_post").read())
+        self.assertEqual("t1\n", open("results/t1/1/run").read())
+        self.assertEqual("other\n", open("results/t2/1/build_post").read())
+        self.assertEqual("other\n", open("results/t2/1/run").read())
+
+
     def test_link(self):
         # Check linking
         self._setupRepo()

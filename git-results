@@ -427,7 +427,9 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
 
             print("Building {0} in {1}".format(commitTag, dirRelative))
             # stderr redirection benefits nosetests, mainly.
-            p = subprocess.Popen(os.path.abspath('./git-results-build'),
+            cmd = ' '.join([ os.path.abspath('./git-results-build'),
+                    commitTag ])
+            p = subprocess.Popen(cmd,
                     shell = True,
                     stdout = subprocess.PIPE,
                     stderr = subprocess.STDOUT)
@@ -527,7 +529,9 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
         output = open('{0}/stdout'.format(resultsDir), 'a', line_buffered)
         error = open('{0}/stderr'.format(resultsDir), 'a', line_buffered)
         try:
-            p = subprocess.Popen(os.path.abspath('./git-results-run'),
+            cmd = ' '.join([ os.path.abspath('./git-results-run'),
+                    commitTag ])
+            p = subprocess.Popen(cmd,
                     shell = True, stdout = subprocess.PIPE,
                     stderr = subprocess.PIPE)
             iothreads = [ tee(p.stdout, output, sys.stdout),

@@ -135,6 +135,9 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2016-4-7 - Added the tag (without results directory) as an argument to
+  git-results-build and git-results-run in case different behavior is desired
+  for different experiment paths.
 * 2016-1-4 - Fixed git-results move for sub-results folders.
 * 2015-4-13 - git-results now respects multiple results folders in a single
   directory, and each can have their own git-results-run and git-results-build.
