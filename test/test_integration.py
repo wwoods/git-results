@@ -73,6 +73,24 @@ class TestGitResults(GrTest):
         self.assertEqual(True, os.path.lexists("results"))
 
 
+    def test_copyLink(self):
+        # Copying a link with a relative path didn't work previous to this
+        # patch.
+        self._setupRepo()
+        os.makedirs("a/b/c")
+        with open("a/b/test1", "w") as f:
+            f.write("echo 'COOL'")
+        addExec("a/b/test1")
+        os.symlink("../test1", "a/b/c/test2")
+        os.symlink(os.path.abspath("a/b/test1"), "a/b/c/test3")
+        with open("git-results-run", "w") as f:
+            f.write("a/b/c/test2\na/b/c/test3")
+
+        git_results.run(shlex.split("results/test -m 'Ok'"))
+
+        self.assertEqual("COOL\nCOOL\n", open("results/test/1/stdout").read())
+
+
     def test_followCmd(self):
         # Ensure that the -f / --follow-cmd works
         self._setupRepo()
@@ -301,7 +319,7 @@ class TestGitResults(GrTest):
         self._assertTagMatchesMessage("round2/r/test/2")
 
         self.assertEqual(True, os.path.lexists("r/test/INDEX"))
-        self.assertEqual("1 (  ok) - Check this out\n", 
+        self.assertEqual("1 (  ok) - Check this out\n",
                 open("r/test/INDEX").read())
         self.assertEqual(True, os.path.lexists("round2/r/test/INDEX"))
         self.assertEqual("1 (  ok) - Check that out\n2 (  ok) - Check us out\n",

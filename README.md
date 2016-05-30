@@ -135,6 +135,7 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2016-5-30 - Fixed bug where symlinks were copied incorrectly.
 * 2016-4-7 - Added the tag (without results directory) as an argument to
   git-results-build and git-results-run in case different behavior is desired
   for different experiment paths.

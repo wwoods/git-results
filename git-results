@@ -164,18 +164,6 @@ def checked(cmd, nonZeroOk = False, shell = False):
     return stdout
 
 
-def copySymlinks(frm, to):
-    """Copies all symlinks recursively from directory frm to directory to."""
-    for f in os.listdir(frm):
-        ffrm = os.path.join(frm, f)
-        fto = os.path.join(to, f)
-        if os.path.islink(ffrm):
-            linkTo = os.readlink(ffrm)
-            os.symlink(linkTo, fto)
-        elif os.path.isdir(ffrm) and os.path.isdir(fto):
-            copySymlinks(ffrm, fto)
-
-
 def ensureGitignore(repoBase, resultsRoot):
     if not checked("git status {0}/{1}/.gitignore --porcelain --ignored".format(
             repoBase, resultsRoot)).startswith("!!"):
@@ -407,7 +395,6 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
                 checked('git remote add origin file://{0}'.format(args.base))
                 checked('git fetch origin {0}'.format(commitTag))
                 checked('git reset --hard FETCH_HEAD')
-                copySymlinks(args.base, dir)
                 for grFile in [ "git-results-build", "git-results-run",
                         "git-results-progress" ]:
                     if os.path.lexists(os.path.join(args.base, grFile)):
