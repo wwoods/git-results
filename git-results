@@ -78,22 +78,21 @@ class FolderState(object):
         allChanges = set()
         self._scanChanges(self._dir, allChanges)
 
-        prefix = None
-        for c in allChanges:
-            if prefix is None:
-                prefix = c
-            else:
-                while not c.startswith(prefix):
-                    prefix = os.path.dirname(prefix)
+        prefix = self._dir
+        if trimCommonPaths:
+            prefix = None
+            for c in allChanges:
+                if prefix is None:
+                    prefix = c
+                else:
+                    while not c.startswith(prefix):
+                        prefix = os.path.dirname(prefix)
 
         allErrors = []
         for c in allChanges:
             # Add 1 to len(prefix) so that we don't include the preceding slash,
             # which would make os.path.join treat it as an absolute
-            target = os.path.relpath(c, self._dir)
-            if trimCommonPaths:
-                target = os.path.relpath(c, prefix)
-            target = os.path.join(dir, target)
+            target = os.path.join(dir, os.path.relpath(c, prefix))
             safeMake(os.path.dirname(target))
             try:
                 os.rename(c, target)
@@ -120,7 +119,15 @@ class FolderState(object):
 
 
     def _isBanned(self, path):
+        """Gets a folder; returns True if it is banned (is our results dir)"""
         if path == os.path.join(self._dir, self._resultsDirRel):
+            return True
+        return False
+
+
+    def _isIgnored(self, path):
+        """Gets a file; returns True if it should be ignored."""
+        if path.endswith('.pyc'):
             return True
         return False
 
@@ -130,7 +137,7 @@ class FolderState(object):
             return
         for f in os.listdir(path):
             ff = os.path.join(path, f)
-            if os.path.isfile(ff):
+            if os.path.isfile(ff) and not self._isIgnored(ff):
                 self._files.add(ff)
             if os.path.isdir(ff) and not os.path.islink(ff):
                 self._scan(ff)
@@ -141,7 +148,8 @@ class FolderState(object):
             return
         for f in os.listdir(path):
             ff = os.path.join(path, f)
-            if os.path.isfile(ff) and ff not in self._files:
+            if (os.path.isfile(ff) and ff not in self._files
+                    and not self._isIgnored(ff)):
                 changeset.add(ff)
             elif os.path.isdir(ff) and not os.path.islink(ff):
                 self._scanChanges(ff, changeset)
@@ -149,7 +157,10 @@ class FolderState(object):
 
 
 def checked(cmd, nonZeroOk = False, shell = False):
-    cmd = shlex.split(cmd)
+    if not isinstance(cmd, (tuple, list)):
+        raise ValueError("Must always be a list or tuple so that quotes "
+                "aren't messed up")
+
     p = subprocess.Popen(cmd, stdout = subprocess.PIPE,
             stderr = subprocess.PIPE, shell = shell)
     stdout, stderr = p.communicate()
@@ -165,8 +176,8 @@ def checked(cmd, nonZeroOk = False, shell = False):
 
 
 def ensureGitignore(repoBase, resultsRoot):
-    if not checked("git status {0}/{1}/.gitignore --porcelain --ignored".format(
-            repoBase, resultsRoot)).startswith("!!"):
+    if not checked([ "git", "status", "{0}/{1}/.gitignore".format(repoBase,
+            resultsRoot), "--porcelain", "--ignored" ]).startswith("!!"):
         with open(os.path.join(repoBase, '.gitignore'), 'a') as f:
             f.write("\n/{0}".format(resultsRoot))
 
@@ -391,10 +402,11 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
 
             # Build not previously completed, rebuild project
             if dir is not None:
-                checked('git init')
-                checked('git remote add origin file://{0}'.format(args.base))
-                checked('git fetch origin {0}'.format(commitTag))
-                checked('git reset --hard FETCH_HEAD')
+                checked([ "git", "init" ])
+                checked([ "git", "remote", "add", "origin",
+                        "file://" + args.base ])
+                checked([ "git", "fetch", "origin", commitTag ])
+                checked([ "git", "reset", "--hard", "FETCH_HEAD" ])
                 for grFile in [ "git-results-build", "git-results-run",
                         "git-results-progress" ]:
                     if os.path.lexists(os.path.join(args.base, grFile)):
@@ -430,7 +442,9 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
             # Now that we've built it, snapshot the folder so we can copy whatever
             # changed as results.  We'll be a little smart and take off the
             # greatest common path too...
-            fs = FolderState(dir, resultsDir)
+            changeRoot = os.path.join(dir or '.',
+                    os.path.dirname(args.tag_root))
+            fs = FolderState(changeRoot, resultsDir)
             for f in extraFiles:
                 _, fTo = f.split(':')
                 fs.forgetPath(os.path.join(os.path.join(dir, fTo)))
@@ -709,7 +723,7 @@ def setupExperiment(repoBase, resultsRoot, resultsLeaf, message):
     tagDir = os.path.join(experimentDir, "{0}".format(n))
 
     if message:
-        cleanMessage = _escapeString(message)
+        cleanMessage = message
     else:
         try:
             _tag, _state, oldMessage = indexRead(repoBase, tag)
@@ -720,10 +734,10 @@ def setupExperiment(repoBase, resultsRoot, resultsLeaf, message):
         if len(message) < 5 or message.startswith("Please replace"):
             raise ValueError("Commit message must be at least 5 "
                     "characters; got: '" + message + "'")
-        cleanMessage = _escapeString(message)
+        cleanMessage = message
 
     # Check the state of our git repo
-    if checked("git status --porcelain").strip():
+    if checked([ "git", "status", "--porcelain" ]).strip():
         # Need to commit - make a branch for us
         branch = "git-results"
         # If the folder with git-results-run is not cwd, use that as an
@@ -734,11 +748,11 @@ def setupExperiment(repoBase, resultsRoot, resultsLeaf, message):
 
         # If this fails, the branch didn't exist or we're already on it, both
         # of which are fine
-        checked("git checkout -B {0}".format(branch))
-        checked("git add -A {0}".format(repoBase))
-        checked('git commit -m "{0}"'.format(cleanMessage))
+        checked([ "git", "checkout", "-B", branch ])
+        checked([ "git", "add", "-A", repoBase ])
+        checked([ "git", "commit", "-m", cleanMessage ])
 
-    curCommit = checked("git rev-parse HEAD").strip()
+    curCommit = checked([ "git", "rev-parse", "HEAD" ]).strip()
 
     # Actually make our folder
     tagDirRun = tagDir + RUN_SUFFIX
@@ -771,7 +785,7 @@ def setupExperiment(repoBase, resultsRoot, resultsLeaf, message):
                 latestLinkAs)
 
         # Add our tag to the git repo
-        checked('git tag -a -m "{0}" {1}'.format(cleanMessage, tag))
+        checked([ "git", "tag", "-a", "-m", cleanMessage, tag ])
 
         # Write our message file
         with open(os.path.join(tagDirRun, "git-results-message"), "w") as f:
@@ -798,7 +812,7 @@ def setupExperiment(repoBase, resultsRoot, resultsLeaf, message):
             if latestLinkAs is not None:
                 safeRemove(latestLinkAs)
                 safeRollback(os.path.dirname(latestLinkAs))
-            checked('git tag -d "{0}"'.format(tag), nonZeroOk = [ 1 ])
+            checked([ "git", "tag", "-d", tag ], nonZeroOk = [ 1 ])
             indexExpunge(repoBase, tag)
         except:
             traceback.print_exc()
@@ -838,19 +852,13 @@ def checkTag(s, allowExperimentInstance = None):
     return s
 
 
-def _escapeString(st):
-    """Returns st escaped so it can be used as a string within the shell"""
-    return st.replace('"', '\\"').replace("&", "\\&"
-            ).replace("|", "\\|").replace("!", "\\!")
-
-
 def _getStringViaEditor(prompt = "", default = ""):
     """Gets a string by popping up an editor in the CLI; optionally presents
     a reason."""
     baseEditor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
     # Note that git config returns 1 if key not found
-    gitEditor = checked("git config --get core.editor", nonZeroOk = [ 1 ]
-            ).strip()
+    gitEditor = checked([ "git", "config", "--get", "core.editor" ],
+            nonZeroOk=[1]).strip()
     editor = gitEditor or baseEditor
 
     (fd, name) = tempfile.mkstemp(prefix="git-results-", suffix=".txt",
@@ -938,7 +946,13 @@ def _processTagArgs(args, *tagArgs, **kwargs):
         if not tagRoot:
             raise ValueError("git-results-run not found in tag path: {}".format(
                     tag))
-        elif not tagLeaf:
+
+        tagRootFull = os.path.join(args.base, tagRoot)
+        if allowExperimentInstances and not os.path.lexists(tagRootFull):
+            raise ValueError("Results folder '{}' not found".format(
+                    tagRoot))
+
+        if not tagLeaf:
             raise ValueError(("No experiment name (child of results root '{}') "
                     "found in: {}").format(tagRoot, tag))
 
@@ -966,12 +980,32 @@ def _auditMove(base, pathFrom, pathTo):
     redundant between several results.  tagSrc and tagDest are unique, and are
     the actual numbered runs.
     """
-    gitTags = [ t.strip() for t in checked(
-            "git tag -l '{0}' '{0}/*'".format(pathFrom)).strip().split('\n') ]
+    gitTags = set([ t.strip()
+            for t in checked([ "git", "tag", "-l", pathFrom,
+                "{0}/*".format(pathFrom) ]).strip().split('\n')
+            if t.strip() ])
+
+    # Sometimes tags don't exist, but the results folders do.  This is post-bug
+    # behavior, and git-results should handle it
+    fsTags = _auditMoveFindFolderMatches(base, pathFrom)
+
+    diff = gitTags.difference(fsTags)
+    if diff:
+        raise ValueError("Tags found in git but not on filesystem: {}".format(
+                diff))
+    diff = fsTags.difference(gitTags)
+    if diff:
+        # On filesystem, not in git
+        gitTags.update(diff)
+        print("!!! Tags found on filesystem but not in git: {}".format(diff))
+
+    if not gitTags:
+        raise ValueError("No result found under '{}'".format(pathFrom))
+
     matchingTags = []
     for src in gitTags:
         if not src.startswith(pathFrom):
-            raise ValueError("Tag {0} doesn't start with {1}".format(src,
+            raise ValueError("Tag '{0}' doesn't start with '{1}'".format(src,
                     pathFrom))
         dest = pathTo + src[len(pathFrom):]
         # Check that the source folder exists, not just the tag in git
@@ -994,7 +1028,7 @@ def _auditMove(base, pathFrom, pathTo):
 
         # Check that the destination doesn't exist
         existingForms = []
-        if checked("git tag -l '{0}'".format(dest)).strip():
+        if checked([ "git", "tag", "-l", dest ]).strip():
             existingForms.append("tag")
         for s in SUFFIXES:
             if os.path.lexists(dest + s):
@@ -1005,6 +1039,43 @@ def _auditMove(base, pathFrom, pathTo):
             sys.exit(1)
 
     return matchingTags
+
+
+def _auditMoveFindFolderMatches(base, pathFrom):
+    """Part of _auditMove.  Find files that match the requested path, even if
+    they are untagged.
+
+    Experiments are assumed to be folders under pathFrom that have a
+    git-results-message file.
+
+    Return: set() of git tags that are indicated by the file system.
+    """
+    r = set()
+    tagGlob = [ pathFrom ]
+    while tagGlob:
+        tag = tagGlob.pop(0)
+        fsPath = os.path.join(base, tag)
+        if not os.path.lexists(fsPath):
+            continue
+
+        pathList = os.listdir(fsPath)
+        if 'git-results-message' not in pathList:
+            for p in pathList:
+                nTag = '{}/{}'.format(tag, p)
+                fsTag = os.path.join(base, nTag)
+                if not os.path.isdir(fsTag):
+                    continue
+                tagGlob.append(nTag)
+            continue
+
+        # Is an experiment... do suffix detection
+        for s in SUFFIXES:
+            if not s:
+                continue
+            if tag.endswith(s):
+                tag = tag[:-len(s)]
+        r.add(tag)
+    return r
 
 
 class LatestTracker(object):
@@ -1065,10 +1136,9 @@ def _runLink(args):
         dirDest = tagDest + suffix
         safeMake(os.path.dirname(dirDest))
         os.symlink(os.path.relpath(dirSrc, os.path.dirname(dirDest)), dirDest)
-        tagMsg = checked("git tag -l -n1000 {0}".format(tagSrc)).strip()[
+        tagMsg = checked([ "git", "tag", "-l", "-n1000", tagSrc ]).strip()[
                 len(tagSrc):].strip()
-        checked("git tag -a -m '{0}' {1} {2}".format(tagMsg.replace("'", "\'"),
-                tagDest, tagSrc))
+        checked([ "git", "tag", "-a", "-m", tagMsg, tagDest, tagSrc ])
         latestTracker.addTagDir(dirSrc, dirDest, suffix)
     latestTracker.commit()
 
@@ -1122,11 +1192,34 @@ def _runMove(args):
             safeMake(os.path.dirname(dirDest))
             os.rename(dirSrc, dirDest)
             safeRollback(os.path.dirname(dirSrc))
-        tagMsg = checked("git tag -l -n1000 {0}".format(tagSrc)).strip()[
-                len(tagSrc):].strip()
-        checked("git tag -a -m '{0}' {1} {2}".format(tagMsg.replace("'", "\'"),
-                tagDest, tagSrc))
-        checked("git tag -d {0}".format(tagSrc))
+        elif not os.path.lexists(dirDest):
+            raise ValueError("Neither source nor destination exists: {} -> {}"
+                    .format(dirSrc, dirDest))
+
+        # Does the source tag actually exist?
+        if checked([ "git", "tag", "-l", tagSrc ]).strip():
+            tagMsg = checked([ "git", "tag", "-l", "-n1000", tagSrc ]).strip()[
+                    len(tagSrc):].strip()
+            checked([ "git", "tag", "-a", "-m", tagMsg, tagDest, tagSrc ])
+            checked([ "git", "tag", "-d", tagSrc ])
+        elif checked([ "git", "tag", "-l", tagDest ]).strip():
+            # destination tag exists, assume it is correct (this is essentially
+            # a retry operation)
+            pass
+        else:
+            # No previously existing tag...  try to infer commit from
+            # git-results-message
+            with open('{}/{}{}/git-results-message'.format(args.base, tagDest,
+                    suffix)) as f:
+                m = re.search(r"^Commit: ([a-zA-Z0-9]+)\n\ngit-results-run\n"
+                        r"---------------\n",
+                        f.read(),
+                        re.M)
+                if m is None:
+                    raise ValueError("Could not get commit from filesystem "
+                            "for {}".format(tagSrc))
+                msg = checked([ "git", "log", "--format='%B'", "-n", "1", m.group(1) ]).strip()
+                checked([ "git", "tag", "-m", msg, tagDest, m.group(1) ])
         latestTracker.addTagDir(tagSrc + suffix, tagDest + suffix, suffix)
 
         if args.tagsAreInstances:
@@ -1223,7 +1316,9 @@ def _runSupervisor(args):
             deleteExp(".git folder containing experiment no longer exists: {}"
                     .format(expArgs.base))
             continue
-        if not os.path.lexists(expArgs.setupInfo[0]):
+        if not hasattr(expArgs, 'setupInfo'):
+            print("Experiment did not finish setup, OK")
+        elif not os.path.lexists(expArgs.setupInfo[0]):
             deleteExp("Results directory no longer exists: {}".format(
                     expArgs.setupInfo[0]))
             continue
@@ -1490,7 +1585,7 @@ def _run(programArgs):
         print("Caught error (presumably in build): {}".format(
                 traceback.format_exc()))
         print("Deleting {0} and associated tags / links".format(resultsDirRun))
-        checked("git tag -d {0}".format(commitTag), nonZeroOk = [ 1 ])
+        checked([ "git", "tag", "-d", commitTag ], nonZeroOk = [ 1 ])
         try:
             os.unlink(datedLinkRun)
         except OSError, e:

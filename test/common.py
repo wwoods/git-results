@@ -18,17 +18,8 @@ def addExec(fname):
     os.chmod(fname, os.stat(fname).st_mode | stat.S_IEXEC)
 
 
-def checked(cmd):
-    p = subprocess.Popen(cmd, shell = True, stdout = subprocess.PIPE,
-            stderr = subprocess.PIPE)
-    stdout, stderr = p.communicate()
-    r = p.wait()
-
-    if r != 0:
-        raise AssertionError("Command failed {}: {}".format(r, stderr))
-    return stdout
-
-
+# Import the checked() call
+checked = git_results.checked
 
 class GrTest(unittest.TestCase):
     """A test that has a temporary directory attached in which git-results

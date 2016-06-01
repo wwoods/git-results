@@ -10,7 +10,7 @@ from .common import GrTest, git_results, addExec, checked
 class TestRetry(GrTest):
     def _setupRepo(self):
         self.initAndChdirTmp()
-        checked("git init")
+        checked([ "git", "init" ])
         with open('git-results-build', 'w') as f:
             f.write("")
         with open('git-results-run', 'w') as f:

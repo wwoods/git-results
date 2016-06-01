@@ -10,10 +10,10 @@ from .common import GrTest, git_results, addExec, checked
 
 def checkTag(tag):
     """Returns the commit SHA of the given tag, or None if it does not exist."""
-    o = checked("git tag -l {}".format(tag))
+    o = checked([ "git", "tag", "-l", tag ])
     if not o.strip():
         return None
-    return checked("git rev-list {} --".format(tag)).strip().split("\n")[
+    return checked([ "git", "rev-list", tag, "--" ]).strip().split("\n")[
             0].strip()
 
 
@@ -38,13 +38,13 @@ class TestGitResults(GrTest):
     def _setupRepo(self):
         """Initializes the "tmp" directory with a basic repo from the readme."""
         self.initAndChdirTmp()
-        checked("git init")
+        checked([ "git", "init" ])
         with open("hello_world", "w") as f:
             f.write("echo 'Hello, world'\n")
             f.write("echo 'Hello run' > hello_world_run\n")
         addExec("hello_world")
-        checked("git add hello_world")
-        checked("git commit -m 'First version'")
+        checked([ "git", "add", "hello_world" ])
+        checked([ "git", "commit", "-m", "First version" ])
 
         with open("git-results-build", "w") as f:
             # Even though this isn't in the readme, ensure isolation is a thing
@@ -229,6 +229,64 @@ class TestGitResults(GrTest):
         self.assertEqual(False, os.path.lexists(dateBase + "-test/run"))
         self.assertEqual(True, os.path.lexists(dateBase + "-test/run2"))
         self.assertEqual("", open(dateBase + "-test/run2/1-fail/stdout").read())
+        self._assertTagMatchesMessage("results/test/run2/1", suffix="-fail")
+
+
+    def test_moveMissing(self):
+        # Ensure that a request to move something missing is helpful
+        self._setupRepo()
+        try:
+            git_results.run(shlex.split("move results/blah results/blah2"))
+            self.fail("No error raised")
+        except ValueError, e:
+            text = str(e)
+        print("Got error: {}".format(text))
+        self.assertTrue("Results folder 'results' not found" in text)
+
+        # Now make the results folder, but do it again
+        git_results.run(shlex.split("results/test -m 'yee'"))
+
+        print("Doing move")
+        try:
+            git_results.run(shlex.split("move results/blah results/blah2"))
+            self.fail("No error raised")
+        except ValueError, e:
+            text = str(e)
+        print("Got error: {}".format(text))
+        self.assertTrue("No result found under 'results/blah'" in text)
+
+
+    def test_moveMissing_git(self):
+        ## Ensure that a move that is missing a git tag but does exist on the
+        # filesystem works.
+
+        self._setupRepo()
+        git_results.run(shlex.split("results/test -m 'yee'"))
+        checked([ "git", "tag", "--delete", "results/test/1" ])
+        git_results.run(shlex.split("move results/test results/test2"))
+
+        self.assertTrue(os.path.lexists("results/test2/1"))
+        self.assertFalse(os.path.lexists("results/test"))
+        self._assertTagMatchesMessage("results/test2/1")
+
+
+    def test_moveMissing_git_fail(self):
+        ## Ensure that a move that is missing a git tag and was a failure will
+        # work
+
+        self._setupRepo()
+        with open("git-results-run", "w") as f:
+            f.write("set -e\necho LALALA\nechehfeif ooooooojefwij i")
+        with self.assertRaises(SystemExit):
+            git_results.run(shlex.split("results/test -m 'yee'"))
+
+        checked([ "git", "tag", "-d", "results/test/1" ])
+        os.chdir("results")
+        git_results.run(shlex.split("move test test2"))
+        os.chdir("..")
+        self.assertTrue(os.path.lexists("results/test2/1-fail"))
+        self.assertFalse(os.path.lexists("results/test/1-fail"))
+        self._assertTagMatchesMessage("results/test2/1", suffix="-fail")
 
 
     def test_moveSingle(self):
@@ -295,12 +353,12 @@ class TestGitResults(GrTest):
         # Check multiple git-results-runs
         self._setupRepo()
         with open("git-results-run", "w") as f:
-            f.write("echo HMM")
+            f.write("echo HMM | tee outMain")
         os.makedirs("round2")
         with open("round2/git-results-build", "w") as f:
             pass
         with open("round2/git-results-run", "w") as f:
-            f.write("echo ROUND2")
+            f.write("echo ROUND2 | tee outTwo")
         addExec("round2/git-results-build")
         addExec("round2/git-results-run")
 
@@ -324,6 +382,11 @@ class TestGitResults(GrTest):
         self.assertEqual(True, os.path.lexists("round2/r/test/INDEX"))
         self.assertEqual("1 (  ok) - Check that out\n2 (  ok) - Check us out\n",
                 open("round2/r/test/INDEX").read())
+
+        # Check content
+        self.assertEqual("HMM\n", open("r/test/1/outMain").read())
+        self.assertEqual("ROUND2\n", open("round2/r/test/1/outTwo").read())
+        self.assertEqual("ROUND2\n", open("round2/r/test/2/outTwo").read())
 
 
 
@@ -388,8 +451,8 @@ class TestGitResults(GrTest):
             self.fail(str(e))
 
         # Check that our commit properly ignored stuff
-        self.assertTrue(checked(
-                "git status --porcelain --ignored results")
+        self.assertTrue(checked([ "git", "status", "--porcelain", "--ignored",
+                "results" ])
                 .startswith("!!"))
 
         # Check that the git repo was tagged correctly
@@ -606,8 +669,8 @@ class TestGitResults(GrTest):
             self.fail(str(e))
 
         # Check that our commit properly ignored stuff
-        self.assertTrue(checked(
-                "git status --porcelain --ignored qresults")
+        self.assertTrue(checked([ "git", "status", "--porcelain", "--ignored",
+                "qresults" ])
                 .startswith("!!"))
 
         self._assertTagMatchesMessage("qresults/test/run/1")
@@ -626,10 +689,11 @@ class TestGitResults(GrTest):
     def test_readme(self):
         # Ensure that the README scenario works
         self.initAndChdirTmp()
-        checked("git init")
-        checked("touch git-results-build")
-        checked("echo 'echo \"Hello, world\"' > git-results-run")
-        checked("chmod a+x git-results-*")
+        checked([ "git", "init" ])
+        checked([ "touch", "git-results-build" ])
+        with open("git-results-run", "w") as f:
+            f.write("echo \"Hello, world\"")
+        checked([ "chmod", "a+x", "git-results-build", "git-results-run" ])
         try:
             git_results.run(shlex.split("results/test/run -m \"Let's see if it "
                     "prints\""))
