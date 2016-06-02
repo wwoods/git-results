@@ -347,7 +347,7 @@ class TestGitResults(GrTest):
                 """)
         os.makedirs("round2")
         self._config(r"""
-                [/]
+                [/r/test]
                 run = "echo ROUND2 | tee outTwo"
                 """, "round2/git-results.cfg")
 
@@ -523,6 +523,28 @@ class TestGitResults(GrTest):
             self.assertEqual("Yay!", open("results/test/run/3/stdout").read())
         finally:
             os.remove('someTestFile')
+
+
+    def test_configVars(self):
+        ## Check [vars] functionality, in root as well as children
+        self._setupRepo()
+        self._config(r"""
+                [vars]
+                default = "1"
+                val = "ok {default}"
+
+                [/]
+                run = "echo {val}"
+
+                [/b]
+                vars = { "default": "2" }
+                """)
+
+        git_results.run(shlex.split('a/test -m "Test A"'))
+        git_results.run(shlex.split('b/test -m "Test B"'))
+
+        self.assertEqual("ok 1\n", open("a/test/1/stdout").read())
+        self.assertEqual("ok 2\n", open("b/test/1/stdout").read())
 
 
     def test_continuation(self):

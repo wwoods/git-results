@@ -977,6 +977,7 @@ def _parseConfig(args, tagRoot, tagLeaf):
     git-results.cfg at args.base.
     """
     tag = '{}/{}'.format(tagRoot, tagLeaf)
+    tagMatch = '{}/{}'.format(os.path.basename(tagRoot), tagLeaf)
     cfg = reprconf.Config(os.path.join(args.base, os.path.dirname(tagRoot),
             'git-results.cfg'))
 
@@ -993,7 +994,7 @@ def _parseConfig(args, tagRoot, tagLeaf):
     applicable = []
     for sec in cfg:
         if sec.startswith("/"):
-            if tag.startswith(sec[1:]):
+            if tagMatch.startswith(sec[1:]):
                 applicable.append(sec)
     applicable.sort(key=lambda m: len(m))
 
@@ -1001,6 +1002,20 @@ def _parseConfig(args, tagRoot, tagLeaf):
     if 'tag' in fmtKwargs:
         raise ValueError("'tag' is a reserved [vars] member.")
     fmtKwargs['tag'] = tag
+    for sec in applicable:
+        if "vars" in cfg[sec]:
+            fmtKwargs.update(cfg[sec]["vars"])
+        for k, v in cfg[sec].iteritems():
+            if k == "vars":
+                # Already applied
+                continue
+
+            if k not in parms:
+                raise ValueError("Unrecognized configuration key '{}'".format(
+                        k))
+            parms[k] = v
+
+    # Apply formatting... first format fmtKwargs itself, then format parms
     def fmtV(v):
         if isinstance(v, str):
             return v.format(**fmtKwargs)
@@ -1011,12 +1026,8 @@ def _parseConfig(args, tagRoot, tagLeaf):
         if isinstance(v, dict):
             return { k: fmtV(q) for k, q in v.iteritems() }
         return v
-    for sec in applicable:
-        for k, v in cfg[sec].iteritems():
-            if k not in parms:
-                raise ValueError("Unrecognized configuration key '{}'".format(
-                        k))
-            parms[k] = fmtV(v)
+    fmtKwargs = fmtV(fmtKwargs)
+    parms = fmtV(parms)
 
     # Finally apply those kwargs onto args
     args.build = parms['build']

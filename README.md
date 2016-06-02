@@ -51,6 +51,9 @@ cmd = "python test.py"
 # any experiments is required.  When more than one path matches, the most
 # specific path's parameters are used.
 
+# Vars can be overridden in a sub path
+vars = { "cmd": "python test.py arg" }
+
 # Ignore results files from this list of extensions.  This is the default list:
 ignoreExt = [ "pyc", "pyo", "swp" ]
 
@@ -260,6 +263,7 @@ Changelog
 TODO
 ----
 
+* git-results.cfg.local for local [vars] values.  Should be auto-added to .gitignore.
 * -i flag should use its own permanent home, to avoid accidentally mucking up the home directory
   * Or... obsolete -i flag.  Use a pool of LIFO temporary folders, store git-results script pid to make sure you're not overwriting one that's in use.  If something goes wrong (files not copied out, e.g. pid file exists), delete a temporary directory.  None exist, make a new one.  This could shave minutes off of every experiment for long builds.
 * --clean flag to clean up extant -run that aren't registered with -r.
