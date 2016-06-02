@@ -3,6 +3,7 @@ import os
 import shlex
 import shutil
 import tempfile
+import textwrap
 import time
 
 from .common import GrTest, git_results, addExec, checked
@@ -11,25 +12,27 @@ class TestRetry(GrTest):
     def _setupRepo(self):
         self.initAndChdirTmp()
         checked([ "git", "init" ])
-        with open('git-results-build', 'w') as f:
-            f.write("")
-        with open('git-results-run', 'w') as f:
-            f.write("#! /usr/bin/env python2\n")
-            f.write("import os\n")
-            f.write("v = len(open('work').read().split('\\n') if os.path.lexists('work') else [])\n")
-            f.write("if v < 3:\n")
-            f.write("    open('work', 'a').write('HI\\n')\n")
-            f.write("    raise Exception('Booo!')\n")
-        with open('git-results-progress', 'w') as f:
-            f.write("cat work | wc -l")
-        [ addExec(p) for p in [ 'git-results-build', 'git-results-run',
-                'git-results-progress' ] ]
+        with open("run.py", "w") as f:
+            f.write(textwrap.dedent(r"""
+                    import os
+                    v = len(open('work').read().split('\n') if os.path.lexists('work') else [])
+                    if v < 3:
+                        open('work', 'a').write('HI\n')
+                        raise Exception('Booo!')
+                    """))
+        with open("git-results.cfg", "w") as f:
+            f.write(textwrap.dedent(r"""
+                    [/]
+                    run = "python run.py"
+                    progress = "cat work | wc -l"
+                    progressDelay = 0
+                    """))
 
 
     def test_manualResume_corruptBuildState(self):
         self._setupRepo()
         with self.assertRaises(SystemExit):
-            git_results.run(shlex.split("results/test -m a -r --retry-delay 0"))
+            git_results.run(shlex.split("results/test -m a"))
         key = open('results/test/1-run/git-results-retry-key').read()
         keyFolder = os.path.join(os.path.expanduser('~/.gitresults/'), key)
         with open(os.path.join(keyFolder, "build-state"), 'w') as f:
@@ -42,11 +45,11 @@ class TestRetry(GrTest):
 
     def test_manualResume_fail(self):
         self._setupRepo()
-        with open('git-results-run', 'w') as f:
+        with open("run.py", "w") as f:
             f.write("#! /usr/bin/env python2\n")
             f.write("raise Exception('Booo!')\n")
         with self.assertRaises(SystemExit):
-            git_results.run(shlex.split("results/test -m a -r --retry-delay 0"))
+            git_results.run(shlex.split("results/test -m a"))
         key = open('results/test/1-run/git-results-retry-key').read()
         keyFolder = os.path.join(os.path.expanduser('~/.gitresults/'), key)
         # Switch cwd so that we ensure --internal-retry-continue works out of
@@ -74,7 +77,7 @@ class TestRetry(GrTest):
     def test_manualResume_ok(self):
         self._setupRepo()
         with self.assertRaises(SystemExit):
-            git_results.run(shlex.split("results/test -m a -r --retry-delay 0"))
+            git_results.run(shlex.split("results/test -m a"))
         key = open('results/test/1-run/git-results-retry-key').read()
         keyFolder = os.path.join(os.path.expanduser('~/.gitresults/'), key)
         self.assertEqual(True, os.path.lexists(keyFolder))
@@ -121,7 +124,7 @@ class TestRetry(GrTest):
     def test_supervisorResume_ok(self):
         self._setupRepo()
         with self.assertRaises(SystemExit):
-            git_results.run(shlex.split("results/test -m a -r --retry-delay 0"))
+            git_results.run(shlex.split("results/test -m a"))
         key = open('results/test/1-run/git-results-retry-key').read()
         keyFolder = os.path.join(os.path.expanduser('~/.gitresults/'), key)
         self.assertEqual(True, os.path.lexists(keyFolder))

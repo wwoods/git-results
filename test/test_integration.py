@@ -1,12 +1,13 @@
 
+
+from .common import GrTest, git_results, addExec, checked
+
 import datetime
 import os
 import re
 import shlex
 import shutil
-
-from .common import GrTest, git_results, addExec, checked
-
+import textwrap
 
 def checkTag(tag):
     """Returns the commit SHA of the given tag, or None if it does not exist."""
@@ -29,6 +30,12 @@ class TestGitResults(GrTest):
         self.assertEqual(commit, checkTag(tag))
 
 
+    def _config(self, opts, cfgPath="git-results.cfg"):
+        """Appends opts to the config file."""
+        with open(cfgPath, "a") as f:
+            f.write(textwrap.dedent(opts))
+
+
     def _getDatedBase(self):
         now = datetime.datetime.now()
         return os.path.join('results', 'dated', now.strftime('%Y'),
@@ -46,21 +53,25 @@ class TestGitResults(GrTest):
         checked([ "git", "add", "hello_world" ])
         checked([ "git", "commit", "-m", "First version" ])
 
-        with open("git-results-build", "w") as f:
-            # Even though this isn't in the readme, ensure isolation is a thing
-            f.write("cp hello_world hello_world_2")
-        addExec("git-results-build")
-        with open("git-results-run", "w") as f:
-            f.write("./hello_world_2")
-        addExec("git-results-run")
+        with open("git-results.cfg", "w") as f:
+            pass
+        self._config("""
+                [/]
+                # Default build copies a file to make sure it doesn't reach
+                # the results folder (part of build).
+                build = "cp hello_world hello_world_2"
+                run = "./hello_world_2"
+                """)
 
 
     def test_buildFail(self):
         # Ensure that a failed build leaves no trace behind (except for the
         # commit).
         self._setupRepo()
-        with open("git-results-build", "w") as f:
-            f.write("Fhgwgds")
+        self._config("""
+                [/results]
+                build = "Fhgwgds"
+                """)
         with self.assertRaises(SystemExit):
             git_results.run(shlex.split("results/test/run -m 'Imma fail'"))
 
@@ -83,57 +94,33 @@ class TestGitResults(GrTest):
         addExec("a/b/test1")
         os.symlink("../test1", "a/b/c/test2")
         os.symlink(os.path.abspath("a/b/test1"), "a/b/c/test3")
-        with open("git-results-run", "w") as f:
-            f.write("a/b/c/test2\na/b/c/test3")
+        self._config(r"""
+                [/]
+                run = "a/b/c/test2 && a/b/c/test3"
+                """)
 
         git_results.run(shlex.split("results/test -m 'Ok'"))
 
         self.assertEqual("COOL\nCOOL\n", open("results/test/1/stdout").read())
 
 
-    def test_followCmd(self):
-        # Ensure that the -f / --follow-cmd works
-        self._setupRepo()
-        git_results.run(shlex.split("results/test/run -m 'Woo' -f 'echo yo>follow'"))
-        self.assertEqual("yo\n", open('results/test/run/1/follow').read())
-        with open('git-results-run', 'w') as f:
-            f.write("heihaiwehfiaowhefoi")
-        with self.assertRaises(SystemExit):
-            git_results.run(shlex.split(
-                    "results/test/run -m 'Woo' -f 'echo yo>follow'"))
-        self.assertEqual(False, os.path.lexists("results/test/run/2/follow"))
-
-
     def test_gitGetsTag(self):
-        # Ensure that git-results-build and git-results-run both get the tag
-        # so they can do something with it
+        # Ensure that build and run both get the tag when {tag} is used so they
+        # can do something with it
         self._setupRepo()
-        with open('git-results-build', 'w') as f:
-            f.write(r"""#! /bin/bash
-                    set -e
-                    echo "Building as $1"
-                    if [[ $1 =~ $(echo '\bt1\b') ]]; then
-                        echo "t1" > build_pre
-                    else
-                        echo "other" > build_pre
-                    fi""")
-        with open('git-results-run', 'w') as f:
-            f.write(r"""#! /bin/bash
-                    set -e
-                    mv build_pre build_post
-                    if [[ $1 =~ $(echo '\bt1\b') ]]; then
-                        echo "t1" > run
-                    else
-                        echo "other" > run
-                    fi""")
+        self._config("""
+                [/]
+                build = "echo {tag} > build_pre"
+                run = "mv build_pre build_post && echo {tag} > run"
+                """)
 
         git_results.run(shlex.split("results/t1 -m 't1'"))
         git_results.run(shlex.split("results/t2 -m 't2'"))
 
-        self.assertEqual("t1\n", open("results/t1/1/build_post").read())
-        self.assertEqual("t1\n", open("results/t1/1/run").read())
-        self.assertEqual("other\n", open("results/t2/1/build_post").read())
-        self.assertEqual("other\n", open("results/t2/1/run").read())
+        self.assertEqual("results/t1\n", open("results/t1/1/build_post").read())
+        self.assertEqual("results/t1\n", open("results/t1/1/run").read())
+        self.assertEqual("results/t2\n", open("results/t2/1/build_post").read())
+        self.assertEqual("results/t2\n", open("results/t2/1/run").read())
 
 
     def test_link(self):
@@ -153,8 +140,10 @@ class TestGitResults(GrTest):
                 open("results/latest/test/run2/stdout").read())
 
         # Ensure status carry over
-        with open("git-results-run", "w") as f:
-            f.write("wihefiaheifwf")
+        self._config("""
+                [/]
+                run = "wihefiaheifwf"
+                """)
 
         with self.assertRaises(SystemExit):
             git_results.run(shlex.split("results/test/run -m 'Woo'"))
@@ -216,8 +205,9 @@ class TestGitResults(GrTest):
     def test_moveFail(self):
         # Ensure dated-fail moves
         self._setupRepo()
-        with open('git-results-run', 'w') as f:
-            f.write("hiwehfiahef")
+        self._config("""
+                run = "hiwehfiahef"
+                """)
         dateBase = self._getDatedBase()
         with self.assertRaises(SystemExit):
             git_results.run(shlex.split("results/test/run -m 'woo'"))
@@ -275,8 +265,9 @@ class TestGitResults(GrTest):
         # work
 
         self._setupRepo()
-        with open("git-results-run", "w") as f:
-            f.write("set -e\necho LALALA\nechehfeif ooooooojefwij i")
+        self._config("""
+                run = "echo LALALA && echehfeif ooooooojefwij i"
+                """)
         with self.assertRaises(SystemExit):
             git_results.run(shlex.split("results/test -m 'yee'"))
 
@@ -304,12 +295,10 @@ class TestGitResults(GrTest):
         # Moving a sub-results folder should work alright
         self._setupRepo()
         os.makedirs("round2")
-        with open("round2/git-results-build", "w") as f:
-            pass
-        with open("round2/git-results-run", "w") as f:
-            f.write("echo ROUND2")
-        addExec("round2/git-results-build")
-        addExec("round2/git-results-run")
+        self._config("""
+                [/]
+                run = "echo ROUND2"
+                """, "round2/git-results.cfg")
         git_results.run(shlex.split("round2/results/test/run1 -m Woo1"))
         git_results.run(shlex.split("round2/results/test/run2 -m Woo2"))
         git_results.run(shlex.split("round2/results/test/run3 -m Woo3"))
@@ -350,17 +339,17 @@ class TestGitResults(GrTest):
 
 
     def test_multiple(self):
-        # Check multiple git-results-runs
+        # Check multiple git-results.cfg files working together
         self._setupRepo()
-        with open("git-results-run", "w") as f:
-            f.write("echo HMM | tee outMain")
+        self._config(r"""
+                [/]
+                run = "echo HMM | tee outMain"
+                """)
         os.makedirs("round2")
-        with open("round2/git-results-build", "w") as f:
-            pass
-        with open("round2/git-results-run", "w") as f:
-            f.write("echo ROUND2 | tee outTwo")
-        addExec("round2/git-results-build")
-        addExec("round2/git-results-run")
+        self._config(r"""
+                [/]
+                run = "echo ROUND2 | tee outTwo"
+                """, "round2/git-results.cfg")
 
         git_results.run(shlex.split("r/test -m 'Check this out'"))
         git_results.run(shlex.split("round2/r/test -m 'Check that out'"))
@@ -513,8 +502,9 @@ class TestGitResults(GrTest):
 
     def test_extraFile(self):
         self._setupRepo()
-        with open('git-results-run', 'w') as f:
-            f.write("cat sa")
+        self._config("""
+                run = "cat sa"
+                """)
         with open('someTestFile', 'w') as f:
             f.write("Yay!")
         try:
@@ -565,10 +555,9 @@ class TestGitResults(GrTest):
         git_results.FolderState.moveResultsTo = newMove
         try:
             self._setupRepo()
-            with open('git-results-run', 'w') as f:
-                f.write("echo yodel > alpha\n")
-                f.write("echo gosh > blah\n")
-                f.write("echo gee > cansas\n")
+            self._config("""
+                    run = "echo yodel > alpha; echo gosh > blah; echo gee > cansas"
+                    """)
 
             with self.assertRaises(SystemExit):
                 git_results.run(shlex.split("results/test/run -m 'h'"))
@@ -584,14 +573,32 @@ class TestGitResults(GrTest):
             git_results.FolderState.moveResultsTo = old
 
 
+    def test_ignoreExt(self):
+        # Make sure ignoreExt works
+        self._setupRepo()
+        self._config("""
+                [/]
+                ignoreExt = [ "a", "c" ]
+                run = "touch 1.a && touch 1.b && touch 1.c && touch 1.d"
+                """)
+        git_results.run(shlex.split("results/test -m 'h'"))
+        self.assertFalse(os.path.lexists("results/test/1/1.a"))
+        self.assertTrue(os.path.lexists("results/test/1/1.b"))
+        self.assertFalse(os.path.lexists("results/test/1/1.c"))
+        self.assertTrue(os.path.lexists("results/test/1/1.d"))
+
+
     def test_indexAbort(self):
         # Ensure that failed build (which deletes the tag), remains marked
         # (gone) forever.  Also ensure that next run gets the same message by
         # default
         self._setupRepo()
         git_results.run(shlex.split("results/test/run -m 'h'"))
-        with open('git-results-build', 'w') as f:
-            f.write("hehehihoweihfowhef")
+
+        self._config("""
+                [/]
+                build = "hehehihoweihfowhef"
+                """)
         try:
             git_results.run(shlex.split("results/test/run -m 'h1'"))
             self.fail("Build didn't fail?")
@@ -599,9 +606,12 @@ class TestGitResults(GrTest):
             pass
         self.assertEqual("1 (  ok) - h\n2 (gone) - h1\n",
                 open('results/test/run/INDEX').read())
-        with open('git-results-build', 'w') as f:
-            f.write("cp hello_world hello_world_2")
+
         os.environ['EDITOR'] = 'echo ", now h2" >>'
+        self._config("""
+                [/]
+                build = "cp hello_world hello_world_2"
+                """)
         git_results.run(shlex.split("results/test/run"))
         self.assertEqual("1 (  ok) - h\n2 (  ok) - h1, now h2\n",
                 open('results/test/run/INDEX').read())
@@ -690,10 +700,10 @@ class TestGitResults(GrTest):
         # Ensure that the README scenario works
         self.initAndChdirTmp()
         checked([ "git", "init" ])
-        checked([ "touch", "git-results-build" ])
-        with open("git-results-run", "w") as f:
-            f.write("echo \"Hello, world\"")
-        checked([ "chmod", "a+x", "git-results-build", "git-results-run" ])
+        self._config(r"""
+                [/]
+                run = 'echo "Hello, world"'
+                """)
         try:
             git_results.run(shlex.split("results/test/run -m \"Let's see if it "
                     "prints\""))

@@ -3,6 +3,8 @@ git-results
 
 A helper script / git extension for cataloguing computation results
 
+Version 0.1.0.
+
 ## Installation
 
 Put git-results somewhere on your PATH.  Proper setup can be verified by
@@ -19,9 +21,9 @@ to show the tool's help.
 1. Switch to a temporary branch,
 * Add all local source changes, and create a commit on the temporary branch with all of your code changes,
 * Clone that commit to a temporary folder,
-* Execute `git-results-build` within that folder,
+* Execute the build step within that folder,
 * Snapshot the folder's contents,
-* Execute `git-results-run` within that folder,
+* Execute the run step within that folder,
 * Diff the folder's contents against the original snapshot, moving any new files
   to the specified results directory.
 
@@ -32,38 +34,96 @@ A basic invocation of `git-results` looks like this:
 This will open your favorite text editor (via environment variables `VISUAL` or `EDITOR`, or fallback to `vi`) and prompt for a message further describing the experiment.  After that, `git-results` will do its thing, moving any results files to `results/my/experiment/1` where they are archived.  Note the `/1` at the end of the path!  Every experiment ran through `git-results` is versioned, assisting with iterative development of a single experiment.
 
 
-## Special Files
+## Configuration
 
-`git-results` relies on a few special files in your repository; these files define behaviors and parameters specific to your application.
+`git-results` relies on a special file in your repository named `git-results.cfg`.  This file describes different branches of experiments as well as any configuration options.  The format of the file is similar to an ini; following is an example with documentation for each parameter:
 
-### `git-results-build`
-is a required file that describes what steps are required to build your project - this is separated from `git-results-run` so that e.g. compile errors can be separated from runtime errors.  This file also helps to separate any intermediate files created as a part of the build process from viable results that should be archived.
+```ini
+[vars]
+# Values in this section are available in strings in other sections; all
+# strings (including those in [vars]) have .format() called on them with the
+# values set in [vars] as kwargs.
+cmd = "python test.py"
 
-### `git-results-run`
-is a required file describing what needs to be run to produce output files that need to be recorded.
+[/results]
+# Most sections will start with a / and are parent paths relative to the folder
+# containing git-results.cfg for experiments.  At least one entry matching
+# any experiments is required.  When more than one path matches, the most
+# specific path's parameters are used.
 
-### `git-results-progress`
-is an optional file that should look at the project's current state and return a single, monotonically increasing, floating-point number that describes how far along a process is.  This file is required only for the `-r` flag, which flags an experiment as retry-able on events such as failure or sudden system shutdown.  
+# Ignore results files from this list of extensions.  This is the default list:
+ignoreExt = [ "pyc", "pyo", "swp" ]
 
-Typically, this file might amount to checking the timestamp on a checkpoint file; if the checkpoint file does not get updated, then the process is not progressing and it's possible that a non-transient error is impeding progress.  For example, on a Linux system, this file might contain:
+# Trim result paths aggressively?  False if unspecified.
+# That is, if the application creates folder results/a.txt, then since
+# results/ is a part of all created files, it will be trimmed (leaving just
+# a.txt)
+trim = False
 
-    stat -c %Y my_checkpoint.chkpt 2>/dev/null || echo -1
+# The command to run to build the application.  For python, this would often
+# be the help command in order to check for syntax errors.  Note the usage
+# of {cmd} to refer to the value from [vars].
+#
+# The build command is used to separate temporary files from building -
+# compiled files, generated data, etc - from reaching the results that are
+# copied over.  If unspecified, no build step will be taken.  Often, running
+# a makefile or, for python and other interactive languages, running the help
+# version of the script to scan for Syntax errors is a good idea.
+#
+# Executed in the context of git-result's checkout of the project.  Note that
+# the special var {tag} can be used to pass the full tag as an argument.
+build = "{cmd} --help"
 
-If you wish to use `git-results -r` experiments, then note that you will need to run `git results supervisor` in your crontab or equivalent, to periodically check if any experiments need to be restarted.
+# The command to run that will generate results files.
+#
+# Executed in the context of git-result's checkout of the project.  Note that
+# the special var {tag} can be used to pass the full tag as an argument.
+run = "{cmd}"
 
+# Command to get progress; stdout must be a single floating point number that
+# is expected to monotonically increase as tangible work is completed.  This
+# might be a file timestamp or number of batches calculated, for instance.
+#
+# If specified, a few things are assumed:
+# 1. When this application has a non-zero return code, it is safe to re-run
+#     the application until it returns zero.
+# 2. Every time this experiment is run, it should be re-run upon crashing until
+#     one of:
+#     A) The experiment returns zero.
+#     B) The value returned by the progress command has not increased after
+#        progress-tries consecutive failures of the experiment.
+#     C) There should be a gap of progress-delay seconds between any crashing
+#        of the experiment and a retry.
+# 3. The git-results supervisor is in your crontab.  It should be run every
+#    minute as `git results supervisor`.
+#
+# Executed in the context of git-result's checkout of the project.
+progress = "stat -c %Y results.csv 2> /dev/null || echo -1"
+
+# Number of retries without progress before failing the experiment.
+progressTries = 3
+
+# Number of seconds between retries.  Must be at least 10.
+progressDelay = 30.
+
+[/results/other]
+# For /results/other, this run command will be used rather than the one under
+# /results.
+run = "{cmd} 2"
+```
 
 ## What does `git-results` put in the output folder and the folders above it?
 
 ### Meta information
-If your `git-results-run` file lives at `project/git-results-run` relative to your git repository root, then executing an experiment from the `project` folder as `git results results/a` does the following:
+If your `git-results.cfg` file lives at `project/git-results.cfg` relative to your git repository root, then executing an experiment from the `project` folder as `git results results/a` does the following:
 
 1. Establishes a results root in `project/results`.
 
- The results root is the folder one deeper than the folder containing `git-results-run`; in this example, `project` contains `git-results-run`, so that folder is the results root.  If this folder is not already treated as a results root, then `git-results` will prompt for confirmation of result root creation.  Results roots are automatically added to the git repository's `.gitignore`. 
+ The results root is the folder one deeper than the folder containing `git-results.cfg`; in this example, `project` contains `git-results.cfg`, so that folder is the results root.  If this folder is not already treated as a results root, then `git-results` will prompt for confirmation of result root creation.  Results roots are automatically added to the git repository's `.gitignore`.
 
 * Creates a versioned instance of the experiment named `a` in the results root `project/results`.
 
- Most experiments need to be iteratively refined; `git-results` helps you to manage this by automatically creating subfolders `1`, `2`, etc. for your experiments.  When an experiment completes successfully, these folders will not have a suffix.  However, if they are still running, or `git-results-run` returns non-zero (failure), then these subfolders will be renamed to reflect the experiment's ultimate status (`1-run`, or `1-fail`).
+ Most experiments need to be iteratively refined; `git-results` helps you to manage this by automatically creating subfolders `1`, `2`, etc. for your experiments.  When an experiment completes successfully, these folders will not have a suffix.  However, if they are still running, or the run command returns non-zero (failure), then these subfolders will be renamed to reflect the experiment's ultimate status (`1-run`, or `1-fail`).
 
 * Adds the experiment version to the `INDEX` file.
 
@@ -72,7 +132,7 @@ If your `git-results-run` file lives at `project/git-results-run` relative to yo
 * In the results root, symlinks `latest/experiment` to the last-run version.
 * Creates a link to the experiment version in the `dated` folder of the results root, with the same name and version as the experiment but prefixed with today's date. E.g., `dated/2015/04/13-your/experiment/here/1`
 
-Note that these steps are identical and the results will be the same as if `git results project/results/a` had been run from the git root.  `git-results` always stores information relative to the results root, calculated based on where `git-results-run` last occurs in the specified path.
+Note that these steps are identical and the results will be the same as if `git results project/results/a` had been run from the git root.  `git-results` always stores information relative to the results root, calculated based on where `git-results.cfg` last occurs in the specified path.
 
 ### Experiment results
 The versioned experiment folder will contain the following:
@@ -80,14 +140,14 @@ The versioned experiment folder will contain the following:
 * stdout
 * stderr
 * A meta-information file git-results-message, containing:
-    * The git tag that marks the experiment
-    * The message entered when the experiment was ran
-    * The contents of `git-results-run` and `git-results-build` (and, if it exists, `git-results-progress`
+    * The git tag that marks the experiment.
+    * The message entered when the experiment was ran.
+    * The contents of the `run` and `build` commands from `git-results.cfg`.
     * The starting timestamp, total duration, and whether or not the program exited successfully.
-* Any files created during the execution of `git-results-run`
+* Any files created during the execution of the run command.
 
 
-(can also be executed as `git results project/results/a` from the git root; the path to `git-results-run` determines the working directory)
+(can also be executed as `git results project/results/a` from the git root; the path to `git-results.cfg` determines the working directory)
 
 
 ## Comparing code from two experiments
@@ -97,10 +157,10 @@ The versioned experiment folder will contain the following:
 Note the `--` at the end - without this, git doesn't know what to do.
 
 
-Resuming / Re-Entrant git-results-run files
+Resuming / Re-Entrant `run` Commands
 -------------------------------------------
 
-Check out `git-results-progress` above.
+Check out `progress` above in the config file.
 
 
 Special Directories
@@ -135,6 +195,10 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2016-6-1 - Config overhaul.  Rather than several binary files, there is now
+  a single git-results.cfg file.
+* 2016-6-1 - Various fixes - method for ignoring e.g. '.pyc' files,
+  git results move fixes, trim to git-results-run root by default.
 * 2016-5-30 - Fixed bug where symlinks were copied incorrectly.
 * 2016-4-7 - Added the tag (without results directory) as an argument to
   git-results-build and git-results-run in case different behavior is desired
@@ -205,8 +269,6 @@ TODO
   and log entries to make perusing prior results more straightforward.
 * Git results message should be saved across build-fail runs.  That is, if build
   fails, it should preserve the old message so I can simply amend it.
-* -r(estartable) flag to indicate max transient failure time; if run and a -run
-  exists, it will restart an existing experiment after a warning raw_input().
 * -i should create a temporary file; git-results should never execute a new
   test / commit if this file exists.
 * -run tags should be cleaned up by subsequent runs if they have been terminated

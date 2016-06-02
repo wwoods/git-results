@@ -5,12 +5,14 @@
 from __future__ import print_function
 
 import argparse
+import collections
 import cPickle as pickle
 import datetime
 import inspect
 import os
 import random
 import re
+import reprconf
 import shlex
 import shutil
 import subprocess
@@ -57,10 +59,10 @@ class FolderState(object):
     """An object that tracks which files exist at init and at another time,
     and can copy changes to another folder."""
 
-    def __init__(self, dir, resultsDir):
+    def __init__(self, dir, resultsDir, args):
         """If dir is None, then this is an in-place operation, and we should
         move (rather than copy) the results."""
-        self._inPlace = (dir is None)
+        self._args = args
         self._dir = dir or os.path.abspath('.')
         self._resultsDirRel = os.path.relpath(resultsDir, self._dir)
         if not self._resultsDirRel.startswith(".."):
@@ -127,8 +129,9 @@ class FolderState(object):
 
     def _isIgnored(self, path):
         """Gets a file; returns True if it should be ignored."""
-        if path.endswith('.pyc'):
-            return True
+        for ext in self._args.ignoreExt:
+            if path.endswith('.' + ext):
+                return True
         return False
 
 
@@ -407,11 +410,6 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
                         "file://" + args.base ])
                 checked([ "git", "fetch", "origin", commitTag ])
                 checked([ "git", "reset", "--hard", "FETCH_HEAD" ])
-                for grFile in [ "git-results-build", "git-results-run",
-                        "git-results-progress" ]:
-                    if os.path.lexists(os.path.join(args.base, grFile)):
-                        shutil.copy2(os.path.join(args.base, grFile),
-                                os.path.join(dir, grFile))
 
             # At this point, we have the directory with the right git-results-*.
             os.chdir(workingDir or os.path.curdir)
@@ -424,27 +422,29 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
 
             preBuild = time.time()
 
-            print("Building {0} in {1}".format(commitTag, dirRelative))
-            # stderr redirection benefits nosetests, mainly.
-            cmd = ' '.join([ os.path.abspath('./git-results-build'),
-                    commitTag ])
-            p = subprocess.Popen(cmd,
-                    shell = True,
-                    stdout = subprocess.PIPE,
-                    stderr = subprocess.STDOUT)
-            thread = tee(p.stdout, sys.stdout)
-            thread.join()
-            r = p.wait()
-            if r != 0:
-                print("== BUILD FAILED ==")
-                sys.exit(1)
+            if args.build:
+                print("Building {0} in {1}".format(commitTag, dirRelative))
+                # stderr redirection benefits nosetests, mainly.
+                p = subprocess.Popen(args.build,
+                        shell = True,
+                        stdout = subprocess.PIPE,
+                        stderr = subprocess.STDOUT)
+                thread = tee(p.stdout, sys.stdout)
+                thread.join()
+                r = p.wait()
+                if r != 0:
+                    print("== BUILD FAILED ==")
+                    sys.exit(1)
+            else:
+                print("Skipping build, none specified for {0}".format(
+                        commitTag))
 
             # Now that we've built it, snapshot the folder so we can copy whatever
             # changed as results.  We'll be a little smart and take off the
             # greatest common path too...
             changeRoot = os.path.join(dir or '.',
                     os.path.dirname(args.tag_root))
-            fs = FolderState(changeRoot, resultsDir)
+            fs = FolderState(changeRoot, resultsDir, args)
             for f in extraFiles:
                 _, fTo = f.split(':')
                 fs.forgetPath(os.path.join(os.path.join(dir, fTo)))
@@ -485,7 +485,7 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
             os.chdir(workingDir or os.path.curdir)
 
 
-        hasProgress = os.path.lexists('./git-results-progress')
+        hasProgress = args.retry_until_stall
         print("Running {0} in {1}".format(commitTag, dirRelative))
         print("=" * 79)
         print("=" * 79)
@@ -498,8 +498,7 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
                 """Returns the monotonically increasing, floating-point number
                 that denotes progress.  If retry_until_stall is set, also
                 updates the progress file associated with the retry."""
-                cmd = os.path.abspath('./git-results-progress')
-                p = subprocess.Popen(cmd, shell = True,
+                p = subprocess.Popen(args.progress, shell = True,
                         stdout = subprocess.PIPE,
                         stderr = subprocess.PIPE)
                 stdout, stderr = p.communicate()
@@ -530,9 +529,7 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
         output = open('{0}/stdout'.format(resultsDir), 'a', line_buffered)
         error = open('{0}/stderr'.format(resultsDir), 'a', line_buffered)
         try:
-            cmd = ' '.join([ os.path.abspath('./git-results-run'),
-                    commitTag ])
-            p = subprocess.Popen(cmd,
+            p = subprocess.Popen(args.run,
                     shell = True, stdout = subprocess.PIPE,
                     stderr = subprocess.PIPE)
             iothreads = [ tee(p.stdout, output, sys.stdout),
@@ -660,7 +657,7 @@ def safeRollback(d):
             raise
 
 
-def setupExperiment(repoBase, resultsRoot, resultsLeaf, message):
+def setupExperiment(args, repoBase, resultsRoot, resultsLeaf, message):
     """Sets up the experiment skeleton and commits the git repo to an acceptable
     state.
 
@@ -740,8 +737,7 @@ def setupExperiment(repoBase, resultsRoot, resultsLeaf, message):
     if checked([ "git", "status", "--porcelain" ]).strip():
         # Need to commit - make a branch for us
         branch = "git-results"
-        # If the folder with git-results-run is not cwd, use that as an
-        # annotation for the branch.
+        # Include the path to git-results.cfg as an annotation for the branch
         pathToCur = os.path.relpath(os.path.dirname(resultsDir), repoBase)
         if pathToCur != os.path.curdir:
             branch += "-{}".format(pathToCur)
@@ -793,14 +789,11 @@ def setupExperiment(repoBase, resultsRoot, resultsLeaf, message):
             if message:
                 f.write("{0}\n".format(message))
             f.write("\nCommit: {0}".format(curCommit))
-            f.write("\n\ngit-results-run\n---------------\n")
-            f.write(open('git-results-run').read())
-            f.write("\n\ngit-results-build\n-----------------\n")
-            f.write(open('git-results-build').read())
-            if os.path.lexists('git-results-progress'):
-                f.write("\n\ngit-results-progress\n-----------------\n")
-                f.write(open('git-results-progress').read())
-            f.write("\n\nStarted {0}".format(now.strftime("%Y-%m-%dT%H:%M:%S")))
+            f.write("\n\ngit-results\n-----------\n")
+            f.write("run: {}\nbuild: {}\n".format(args.run, args.build))
+            if args.progress:
+                f.write("progress: {}\n".format(args.progress))
+            f.write("\nStarted {0}".format(now.strftime("%Y-%m-%dT%H:%M:%S")))
     except:
         err, typ, tb = sys.exc_info()
         try:
@@ -884,13 +877,16 @@ def _getStringViaEditor(prompt = "", default = ""):
 def _processTagArgs(args, *tagArgs, **kwargs):
     """Sort out an  arbitrary number of tags.  Sets attribute tag_root with
     the root results directory for the tag (e.g., the directory lower than
-    the one containing git-results-run), and the tag attribute itself to the
+    the one containing git-results.cfg), and the tag attribute itself to the
     rest of the tag (the leaf).  The whole tag may be assembled as
     '/'.join(tag_root, tag).
 
     Also sets args.base with the abs path of the parent folder of current
     working directory containing .git, which is used for the base of each
     argument in tags.
+
+    If there is exactly one tagArgs, then git-results.cfg will be parsed and
+    loaded, populating more fields in args.
 
     Kwargs:
     allowExperimentInstances - If True, allow individual numbered experiments if ALL
@@ -933,7 +929,7 @@ def _processTagArgs(args, *tagArgs, **kwargs):
         tagLeaf = []
         while tagRoot:
             if os.path.lexists(os.path.join(args.base, os.path.dirname(tagRoot),
-                    'git-results-run')):
+                    'git-results.cfg')):
                 break
 
             if '/' not in tagRoot:
@@ -944,7 +940,7 @@ def _processTagArgs(args, *tagArgs, **kwargs):
             tagLeaf.insert(0, nextLeaf)
 
         if not tagRoot:
-            raise ValueError("git-results-run not found in tag path: {}".format(
+            raise ValueError("git-results.cfg not found in tag path: {}".format(
                     tag))
 
         tagRootFull = os.path.join(args.base, tagRoot)
@@ -969,6 +965,73 @@ def _processTagArgs(args, *tagArgs, **kwargs):
     # Flag all tags as either experiments (individual) or folders
     if tagIsExp is not None:
         args.tagsAreInstances = lastWasExperiment
+
+    # Populate config entries if needed
+    if len(tagArgs) == 1:
+        _parseConfig(args, getattr(args, '{}_root'.format(tagArgs[0])),
+                getattr(args, tagArgs[0]))
+
+
+def _parseConfig(args, tagRoot, tagLeaf):
+    """For the given tag (with results directory), populate args from the
+    git-results.cfg at args.base.
+    """
+    tag = '{}/{}'.format(tagRoot, tagLeaf)
+    cfg = reprconf.Config(os.path.join(args.base, os.path.dirname(tagRoot),
+            'git-results.cfg'))
+
+    parms = {
+            'build': None,
+            'ignoreExt': [ "pyc", "pyo", "swp" ],
+            'progress': None,
+            'progressTries': 3,
+            'progressDelay': 30,
+            'run': None,
+            'trim': False,
+    }
+
+    applicable = []
+    for sec in cfg:
+        if sec.startswith("/"):
+            if tag.startswith(sec[1:]):
+                applicable.append(sec)
+    applicable.sort(key=lambda m: len(m))
+
+    fmtKwargs = cfg.get('vars', {})
+    if 'tag' in fmtKwargs:
+        raise ValueError("'tag' is a reserved [vars] member.")
+    fmtKwargs['tag'] = tag
+    def fmtV(v):
+        if isinstance(v, str):
+            return v.format(**fmtKwargs)
+        if isinstance(v, list):
+            return [ fmtV(q) for q in v ]
+        if isinstance(v, tuple):
+            return ( fmtV(q) for q in v )
+        if isinstance(v, dict):
+            return { k: fmtV(q) for k, q in v.iteritems() }
+        return v
+    for sec in applicable:
+        for k, v in cfg[sec].iteritems():
+            if k not in parms:
+                raise ValueError("Unrecognized configuration key '{}'".format(
+                        k))
+            parms[k] = fmtV(v)
+
+    # Finally apply those kwargs onto args
+    args.build = parms['build']
+    args.ignoreExt = parms['ignoreExt']
+    if not isinstance(args.ignoreExt, collections.Iterable):
+        raise ValueError("ignoreExt must be iterable: {}".format(
+                args.ignoreExt))
+    args.progress = parms['progress']
+    args.run = parms['run']
+    args.trim = parms['trim']
+
+    # Legacy names
+    args.retry_until_stall = bool(parms['progress'])
+    args.retry_minimum = parms['progressTries']
+    args.retry_delay = parms['progressDelay']
 
 
 def _auditMove(base, pathFrom, pathTo):
@@ -1211,8 +1274,8 @@ def _runMove(args):
             # git-results-message
             with open('{}/{}{}/git-results-message'.format(args.base, tagDest,
                     suffix)) as f:
-                m = re.search(r"^Commit: ([a-zA-Z0-9]+)\n\ngit-results-run\n"
-                        r"---------------\n",
+                m = re.search(r"^Commit: ([a-zA-Z0-9]+)\n\ngit-results.*\n"
+                        r"------------*\n",
                         f.read(),
                         re.M)
                 if m is None:
@@ -1373,7 +1436,7 @@ def _run(programArgs):
             help = "Do the build in place.  If you use this, you can't run "
                 "several simultaneous git results calls on the same repo.  "
                 "Recommended when you're trying to get a build working, or "
-                "testing short experiments, but not otherwise.")
+                "for testing short experiments, but not otherwise.")
     ap.add_argument("-x", "--extra-file", action = 'append', default = [],
             help = "Of form path1:path2, where path1 is relative or absolute "
                 "to the current working directory, and path2 is relative to "
@@ -1382,38 +1445,9 @@ def _run(programArgs):
                 "git-results-run.  Note that the extra file will be included "
                 "as a \"result\".  That is, retained after the experiment "
                 "completes.  --extra-file can be specified multiple times.")
-    ap.add_argument("-t", "--trim", action = 'store_true',
-            help = "Trim output paths to most common denominator.  That is, if "
-                "the application creates folder results/a.txt, then since the "
-                "results/ path is part of all created files, it will be "
-                "trimmed (leaving just a.txt).")
     ap.add_argument("-m", "--message", help = "Commit message / "
             "git-results-message content paired with results.  If unspecified, "
             "we'll pop open an editor for you (like git commit)")
-    ap.add_argument("-f", "--follow-cmd", help = "Shell command to run in the "
-            "results directory on successful completion.  Useful for e.g. "
-            "opening generated images when you don't want to put this in "
-            "git-results-run")
-    ap.add_argument("-r", "--retry-until-stall", action = 'store_true',
-            help = "Registers the experiment with git-results supervisor, which "
-            "will automatically retry the experiment until it succeeds or an "
-            "error appears intransient.  Requires git-results-progress script, "
-            "which calculates and produces output ending with a single line with only a floating-point "
-            "number that is expected to keep increasing as progress happens (it should never decrease).  "
-            "Any lines except for the final line will overwrite /progress in the "
-            "experiment folder.  Pairs with --retry-minimum and --retry-delay to "
-            "determine how many times a transient failure without progress will "
-            "be retried, and what the delay between trials is.")
-    ap.add_argument("--retry-minimum", type = int, default = 3, help = "Number of "
-            "times to retry a transient failure (see --retry-until-stall)")
-    def checkDelay(x):
-        v = float(x)
-        if v < 10.0 and not IS_TEST:
-            raise ValueError("--retry-delay must be >= 10: {}".format(v))
-        return v
-    ap.add_argument("--retry-delay", type = checkDelay, default = 20,
-            help = "Seconds between retries (see --retry-until-stall).  Must "
-                "be >= 10")
     ap.add_argument("--internal-retry-continue", action = 'store_true',
             help = "Used by supervisor, resumes a previously aborted experiment.  "
             "Uses the corresponding values saved in ~/.gitresults/[tagKey]/settings")
@@ -1424,6 +1458,7 @@ def _run(programArgs):
             "dated" is an invalid option, as that is a unique folder created by
             git-results to help with indexing results by date.
             "latest" is invalid as well, referring to another unique folder."""))
+    ap.add_argument("--version", action="version", version="0.1.0")
     args = ap.parse_args(programArgs)
 
     if args.internal_retry_continue:
@@ -1435,15 +1470,6 @@ def _run(programArgs):
         _processTagArgs(args, "tag")
 
         if args.retry_until_stall:
-            if not os.path.isfile(os.path.join(args.base,
-                    os.path.dirname(args.tag_root), 'git-results-progress')):
-                print(textwrap.dedent("""
-                        To use git-results with the -r or --retry-until-stall flag, you must have
-                        a file named git-results-progress next to your git-results-run.  This file
-                        can output anything, but the final line of output must contain only a floating
-                        point number, which monotonically increases as work progresses."""))
-                sys.exit(1)
-
             LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
             header = "r"
             if IS_TEST:
@@ -1464,25 +1490,17 @@ def _run(programArgs):
 
     # Work in the parent of the results root, which has git-results-* files
     os.chdir(os.path.join(args.base, os.path.dirname(args.tag_root)))
-    if not os.path.isfile('git-results-build'):
+    if not args.run:
         print(textwrap.dedent("""
-                To use git-results, two files are required: git-results-run and
-                git-results-build.  Even if git-results-build is empty, it must exist.
-                git-results-build should be a script that builds resources used by
-                git-results-run."""))
-        sys.exit(1)
-
-    if not os.path.isfile('git-results-run'):
-        print(textwrap.dedent("""
-                To use git-results, you must have a git-results-run file in your
-                repository's root.  This file must contain a single shell-executable
+                To use git-results, you must have a run command in your cfg
+                file.  This file must contain a single shell-executable
                 line of text that runs your experiment."""))
         sys.exit(1)
 
     if not hasattr(args, 'setupInfo'):
         # Set up the experiment
         resultsDirRun, datedLinkRun, latestLinkRun, commitTag = setupExperiment(
-                args.base, args.tag_root, args.tag, args.message)
+                args, args.base, args.tag_root, args.tag, args.message)
         if args.retry_until_stall:
             args.setupInfo = [ resultsDirRun, datedLinkRun, latestLinkRun,
                     commitTag ]
@@ -1654,12 +1672,6 @@ def _run(programArgs):
 
     if runFailed:
         sys.exit(1)
-    elif args.follow_cmd:
-        r = subprocess.Popen(args.follow_cmd, shell = True,
-                cwd = resultsDirNew).wait()
-        if r != 0:
-            raise Exception("--follow-cmd '{}' failed with non-zero return: {}"
-                    .format(args.follow_cmd, r))
 
 
 if __oname__ == '__main__':
