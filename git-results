@@ -1015,7 +1015,24 @@ def _parseConfig(args, tagRoot, tagLeaf):
                         k))
             parms[k] = v
 
-    # Apply formatting... first format fmtKwargs itself, then format parms
+    # Sort formatting according to requirements so that each argument only
+    # needs format called on it once.
+    reqs = {}
+    reqRe = re.compile(r"{([^}]*)}")
+    for k, v in fmtKwargs.iteritems():
+        r = set([ m.group(1) for m in reqRe.finditer(v) ])
+        reqs[k] = r
+
+        if k in r:
+            raise ValueError("Cannot self-reference: {} was '{}'"
+                    .format(k, fmtKwargs[k]))
+    # If we propagate requirement sets N times, we're guaranteed that all
+    # of the requirements will be propagated
+    for _ in range(len(reqs)):
+        for k, r in reqs.iteritems():
+            for k2 in r.copy():
+                r.update(reqs[k2])
+
     def fmtV(v):
         if isinstance(v, str):
             return v.format(**fmtKwargs)
@@ -1026,7 +1043,18 @@ def _parseConfig(args, tagRoot, tagLeaf):
         if isinstance(v, dict):
             return { k: fmtV(q) for k, q in v.iteritems() }
         return v
-    fmtKwargs = fmtV(fmtKwargs)
+
+    # The size of each set is now the number of ancestors it has
+    reqs = sorted([ (k, r) for k, r in reqs.iteritems() ],
+            key=lambda m: len(m[1]))
+    reqsDone = set()
+    for k, r in reqs:
+        d = r.difference(reqsDone)
+        if len(d) != 0:
+            raise ValueError("'{}' seems cyclical on {}: {}".format(k, d,
+                    fmtKwargs[k]))
+        fmtKwargs[k] = fmtV(fmtKwargs[k])
+        reqsDone.add(k)
     parms = fmtV(parms)
 
     # Finally apply those kwargs onto args

@@ -30,9 +30,9 @@ class TestGitResults(GrTest):
         self.assertEqual(commit, checkTag(tag))
 
 
-    def _config(self, opts, cfgPath="git-results.cfg"):
+    def _config(self, opts, new=False, cfgPath="git-results.cfg"):
         """Appends opts to the config file."""
-        with open(cfgPath, "a") as f:
+        with open(cfgPath, "a" if not new else "w") as f:
             f.write(textwrap.dedent(opts))
 
 
@@ -53,15 +53,13 @@ class TestGitResults(GrTest):
         checked([ "git", "add", "hello_world" ])
         checked([ "git", "commit", "-m", "First version" ])
 
-        with open("git-results.cfg", "w") as f:
-            pass
         self._config("""
                 [/]
                 # Default build copies a file to make sure it doesn't reach
                 # the results folder (part of build).
                 build = "cp hello_world hello_world_2"
                 run = "./hello_world_2"
-                """)
+                """, True)
 
 
     def test_buildFail(self):
@@ -298,7 +296,7 @@ class TestGitResults(GrTest):
         self._config("""
                 [/]
                 run = "echo ROUND2"
-                """, "round2/git-results.cfg")
+                """, cfgPath="round2/git-results.cfg")
         git_results.run(shlex.split("round2/results/test/run1 -m Woo1"))
         git_results.run(shlex.split("round2/results/test/run2 -m Woo2"))
         git_results.run(shlex.split("round2/results/test/run3 -m Woo3"))
@@ -349,7 +347,7 @@ class TestGitResults(GrTest):
         self._config(r"""
                 [/r/test]
                 run = "echo ROUND2 | tee outTwo"
-                """, "round2/git-results.cfg")
+                """, cfgPath="round2/git-results.cfg")
 
         git_results.run(shlex.split("r/test -m 'Check this out'"))
         git_results.run(shlex.split("round2/r/test -m 'Check that out'"))
@@ -526,25 +524,83 @@ class TestGitResults(GrTest):
 
 
     def test_configVars(self):
-        ## Check [vars] functionality, in root as well as children
+        ## Ensure that configuration works
         self._setupRepo()
-        self._config(r"""
+        self._config("""
                 [vars]
-                default = "1"
-                val = "ok {default}"
+                cmd = "test"
+                cmd2 = "{cmd} ok"
+                cmd3 = "{cmd2}, really"
+
+                [/r/a]
+                run = "echo {cmd}"
+
+                [/r/b]
+                run = "echo {cmd2}"
+
+                [/r/c]
+                vars = { "cmd": "test2" }
+                run = "echo {cmd}"
+
+                [/r/c/b]
+                run = "echo {cmd2}"
+
+                [/r/d]
+                run = "echo {cmd3}"
+                """, True)
+
+        git_results.run(shlex.split("r/a -m 'h'"))
+        git_results.run(shlex.split("r/b -m 'h'"))
+        git_results.run(shlex.split("r/c/a -m 'h'"))
+        git_results.run(shlex.split("r/c/b -m 'h'"))
+        git_results.run(shlex.split("r/d -m 'h'"))
+
+        self.assertEqual("test\n", open("r/a/1/stdout").read())
+        self.assertEqual("test ok\n", open("r/b/1/stdout").read())
+        self.assertEqual("test2\n", open("r/c/a/1/stdout").read())
+        self.assertEqual("test2 ok\n", open("r/c/b/1/stdout").read())
+        self.assertEqual("test ok, really\n", open("r/d/1/stdout").read())
+
+
+    def test_configVars_cycles(self):
+        ## Ensure that a self-cycle is broken
+        self._setupRepo()
+        self._config("""
+                [vars]
+                a = "{a} a"
 
                 [/]
-                run = "echo {val}"
-
-                [/b]
-                vars = { "default": "2" }
+                run = "echo {a}"
                 """)
 
-        git_results.run(shlex.split('a/test -m "Test A"'))
-        git_results.run(shlex.split('b/test -m "Test B"'))
+        try:
+            git_results.run(shlex.split("r/a -m 'h'"))
+        except ValueError, e:
+            text = str(e)
+        else:
+            self.fail("Self-cycle passed rather than failing")
 
-        self.assertEqual("ok 1\n", open("a/test/1/stdout").read())
-        self.assertEqual("ok 2\n", open("b/test/1/stdout").read())
+        print("Got error: {}".format(text))
+        self.assertTrue("Cannot self-reference: a was '{a} a'" in text)
+
+
+        self._config("""
+                [vars]
+                a = "{b}"
+                b = "{a}"
+
+                [/]
+                run = "echo {a}"
+                """, True)
+        try:
+            git_results.run(shlex.split("r/b -m 'h'"))
+        except ValueError, e:
+            text = str(e)
+        else:
+            self.fail("Cycle passed rather than failing")
+
+        print("Got error: {}".format(text))
+        self.assertTrue("'a' seems cyclical on set(['a', 'b']): {b}" in text)
 
 
     def test_continuation(self):

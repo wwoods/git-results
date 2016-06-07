@@ -198,6 +198,8 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2016-6-8 - Config vars now do dependency sorting, substituting at the last
+  possible moment.
 * 2016-6-1 - Config overhaul.  Rather than several binary files, there is now
   a single git-results.cfg file.
 * 2016-6-1 - Various fixes - method for ignoring e.g. '.pyc' files,
