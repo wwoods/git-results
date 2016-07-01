@@ -1,4 +1,4 @@
-#! /usr/bin/env python2
+#! /usr/bin/env python3
 
 """Created by Walt Woods, 2014"""
 
@@ -6,10 +6,10 @@ from __future__ import print_function
 
 import argparse
 import collections
-import cPickle as pickle
 import datetime
 import inspect
 import os
+import pickle
 import random
 import re
 import reprconf
@@ -48,7 +48,7 @@ class IndexStates(object):
     OK = '  ok'
     MOVE = 'move'
     RUN = ' run'
-for key, val in IndexStates.__dict__.iteritems():
+for key, val in IndexStates.__dict__.items():
     if key[0] == '_':
         continue
     if len(val) != 4:
@@ -96,14 +96,27 @@ class FolderState(object):
             # which would make os.path.join treat it as an absolute
             target = os.path.join(dir, os.path.relpath(c, prefix))
             safeMake(os.path.dirname(target))
-            try:
-                os.rename(c, target)
-            except OSError, e:
-                # 2 - No such file; was temporary
-                if e.errno != 2:
-                    allErrors.append("{0}: {1}".format(c, ''.join(
-                            traceback.format_exception_only(
-                                *sys.exc_info()[:2]))))
+            nRetries = 4
+            for _retry in range(nRetries):
+                try:
+                    os.rename(c, target)
+                except OSError as e:
+                    if e.errno == 16 and _retry != nRetries - 1:
+                        # Device busy, will retry
+                        pass
+                    elif e.errno == 2:
+                        # 2 - No such file; was temporary
+                        break
+                    else:
+                        allErrors.append("{0}: {1}".format(c, ''.join(
+                                traceback.format_exception_only(
+                                    *sys.exc_info()[:2]))))
+                        break
+                else:
+                    break
+
+                # Will retry
+                time.sleep(1.)
 
         if allErrors:
             raise Exception("Errors during file move:\n\n{0}".format(
@@ -175,7 +188,7 @@ def checked(cmd, nonZeroOk = False, shell = False):
             pass
         else:
             raise Exception("Command '{0}' failed with {1}".format(cmd, r))
-    return stdout
+    return stdout.decode('utf-8')
 
 
 def ensureGitignore(repoBase, resultsRoot):
@@ -201,7 +214,10 @@ def tee(infile, *files):
     given file to one or more other files.
     """
     def fanout():
-        for line in iter(infile.readline, ''):
+        for line in iter(infile.readline, b''):
+            assert isinstance(line, bytes)
+            line = line.decode('utf-8')
+
             for f in files:
                 f.write(line)
         infile.close()
@@ -359,7 +375,7 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
         def writeRetryStats():
             """Write a bunch of stats from our closure"""
             open(getPathForResumeKey(args.retryKey, "build-state.new"),
-                    'w').write(pickle.dumps({
+                    'wb').write(pickle.dumps({
                         'buildTime': preRun - preBuild,
                         'runStart': preRun,
                         'fs': fs,
@@ -465,14 +481,14 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
             # Previously built OK, use old values
             try:
                 d = pickle.loads(open(getPathForResumeKey(args.retryKey,
-                        "build-state")).read())
+                        "build-state"), 'rb').read(), encoding='bytes')
             except pickle.UnpicklingError:
                 # Corrupt test; mark as failed, append to stderr!
                 with open('{0}/stderr'.format(resultsDir), 'a') as f:
                     f.write("\n\ngit-results detected bad formatting for "
                             "pickle file build-state; copied to result "
                             "directory and marking experiment failed")
-                    return 1, False
+                    return 1, False, False
             fs = d['fs']
             preRun = time.time() - (os.path.getmtime(getPathForResumeKey(
                     args.retryKey, "heartbeat")) - d['runStart'])
@@ -502,6 +518,8 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
                         stdout = subprocess.PIPE,
                         stderr = subprocess.PIPE)
                 stdout, stderr = p.communicate()
+                stdout = stdout.decode('utf-8')
+                stderr = stderr.decode('utf-8')
                 r = p.wait()
                 try:
                     value = float(stdout.strip().split('\n')[-1])
@@ -550,6 +568,7 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
 
         # Any exceptions raised cause the whole experiment to be deleted.
         # So, catch them, redirect them to error, and
+        wasMoveFailure = False
         try:
             if r != 0:
                 error.write(("\n\ngit-results detected abnormal program "
@@ -597,14 +616,18 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
 
                 # If we reach here, everything ran OK, so copy files
                 print("Copying results to {0}".format(resultsDirRelative))
-                fs.moveResultsTo(resultsDir, trimCommonPaths)
+                try:
+                    fs.moveResultsTo(resultsDir, trimCommonPaths)
+                except:
+                    wasMoveFailure = True
+                    raise
         except:
             # Only thing we change is that our result is no longer zero.
             tbErr = traceback.format_exc()
             sys.stderr.write(tbErr)
             error.write("\n\ngit-results error: {0}\n".format(tbErr))
 
-            if r == 0:
+            if r == 0 and not wasMoveFailure:
                 # It's over 9000
                 r = 9001
 
@@ -612,7 +635,7 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
         threadsShouldDie = True
         [ t.join() for t in threads ]
 
-        return r, didAbort
+        return r, didAbort, wasMoveFailure
     finally:
         os.chdir(odir)
 
@@ -620,7 +643,7 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
 def safeMake(path):
     try:
         os.makedirs(path)
-    except OSError, e:
+    except OSError as e:
         # exists
         if e.errno != 17:
             raise
@@ -630,7 +653,7 @@ def safeRemove(f):
     """Removes a single file, safely"""
     try:
         os.remove(f)
-    except OSError, e:
+    except OSError as e:
         # No such file or directory
         if e.errno != 2:
             raise
@@ -639,7 +662,7 @@ def safeRemove(f):
 def safeRemoveDir(d):
     try:
         shutil.rmtree(d)
-    except OSError, e:
+    except OSError as e:
         # No such file or directory
         if e.errno != 2:
             raise
@@ -651,7 +674,7 @@ def safeRollback(d):
     """
     try:
         os.removedirs(d)
-    except OSError, e:
+    except OSError as e:
         # Directory not empty OR no such file or directory (66 is mac os x)
         if e.errno != 39 and e.errno != 2 and e.errno != 66:
             raise
@@ -795,7 +818,7 @@ def setupExperiment(args, repoBase, resultsRoot, resultsLeaf, message):
                 f.write("progress: {}\n".format(args.progress))
             f.write("\nStarted {0}".format(now.strftime("%Y-%m-%dT%H:%M:%S")))
     except:
-        err, typ, tb = sys.exc_info()
+        typ, err, tb = sys.exc_info()
         try:
             safeRemoveDir(tagDirRun)
             safeRollback(os.path.dirname(tagDirRun))
@@ -809,7 +832,7 @@ def setupExperiment(args, repoBase, resultsRoot, resultsLeaf, message):
             indexExpunge(repoBase, tag)
         except:
             traceback.print_exc()
-        raise err, typ, tb
+        raise err
 
     return tagDirRun, linkAs, latestLinkAs, tag
 
@@ -1005,7 +1028,7 @@ def _parseConfig(args, tagRoot, tagLeaf):
     for sec in applicable:
         if "vars" in cfg[sec]:
             fmtKwargs.update(cfg[sec]["vars"])
-        for k, v in cfg[sec].iteritems():
+        for k, v in cfg[sec].items():
             if k == "vars":
                 # Already applied
                 continue
@@ -1019,7 +1042,7 @@ def _parseConfig(args, tagRoot, tagLeaf):
     # needs format called on it once.
     reqs = {}
     reqRe = re.compile(r"{([^}]*)}")
-    for k, v in fmtKwargs.iteritems():
+    for k, v in fmtKwargs.items():
         r = set([ m.group(1) for m in reqRe.finditer(v) ])
         reqs[k] = r
 
@@ -1029,7 +1052,7 @@ def _parseConfig(args, tagRoot, tagLeaf):
     # If we propagate requirement sets N times, we're guaranteed that all
     # of the requirements will be propagated
     for _ in range(len(reqs)):
-        for k, r in reqs.iteritems():
+        for k, r in reqs.items():
             for k2 in r.copy():
                 r.update(reqs[k2])
 
@@ -1041,11 +1064,11 @@ def _parseConfig(args, tagRoot, tagLeaf):
         if isinstance(v, tuple):
             return ( fmtV(q) for q in v )
         if isinstance(v, dict):
-            return { k: fmtV(q) for k, q in v.iteritems() }
+            return { k: fmtV(q) for k, q in v.items() }
         return v
 
     # The size of each set is now the number of ancestors it has
-    reqs = sorted([ (k, r) for k, r in reqs.iteritems() ],
+    reqs = sorted([ (k, r) for k, r in reqs.items() ],
             key=lambda m: len(m[1]))
     reqsDone = set()
     for k, r in reqs:
@@ -1207,7 +1230,7 @@ class LatestTracker(object):
         # Update latest; each matchingTag's last part is the trial number, and
         # we should link the highest
         for path, (number, suffix, target, srcLatest
-                ) in self._entries.iteritems():
+                ) in self._entries.items():
             safeMake(os.path.dirname(path + suffix))
             os.symlink(os.path.relpath(target, os.path.dirname(path)),
                     path + suffix)
@@ -1394,8 +1417,8 @@ def _runSupervisor(args):
 
         # If we reach here, there are settings to be checked and respected
         try:
-            expArgs = pickle.loads(open(getPathForResumeKey(retryKey, "settings"))
-                    .read())
+            expArgs = pickle.loads(open(getPathForResumeKey(retryKey,
+                    "settings"), 'rb').read(), encoding='bytes')
         except pickle.UnpicklingError:
             newDir = getPathForResumeKey("bad_" + retryKey)
             print("Corrupt experiment {}, unpickle of settings failed.  Moving "
@@ -1502,8 +1525,8 @@ def _run(programArgs):
 
     if args.internal_retry_continue:
         # args.tag is our key for resuming a paused experiment.
-        args = pickle.loads(open(getPathForResumeKey(args.tag, "settings"))
-                .read())
+        args = pickle.loads(open(getPathForResumeKey(args.tag, "settings"),
+                'rb').read(), encoding='bytes')
     else:
         # Starting a new experiment
         _processTagArgs(args, "tag")
@@ -1519,12 +1542,12 @@ def _run(programArgs):
                 try:
                     os.makedirs(getPathForResumeKey(retryKey))
                     break
-                except OSError, e:
+                except OSError as e:
                     if e.errno != 17:
                         # Folder already exists
                         raise
             args.retryKey = retryKey
-            with open(getPathForResumeKey(retryKey, "settings"), 'w') as f:
+            with open(getPathForResumeKey(retryKey, "settings"), 'wb') as f:
                 f.write(pickle.dumps(args))
 
     # Work in the parent of the results root, which has git-results-* files
@@ -1543,7 +1566,7 @@ def _run(programArgs):
         if args.retry_until_stall:
             args.setupInfo = [ resultsDirRun, datedLinkRun, latestLinkRun,
                     commitTag ]
-            with open(getPathForResumeKey(args.retryKey, "settings.new"), 'w') as f:
+            with open(getPathForResumeKey(args.retryKey, "settings.new"), 'wb') as f:
                 f.write(pickle.dumps(args))
             os.rename(getPathForResumeKey(args.retryKey, "settings.new"),
                     getPathForResumeKey(args.retryKey, "settings"))
@@ -1558,6 +1581,7 @@ def _run(programArgs):
 
     runFailed = False
     runWillRetry = False
+    wasMoveFailure = False
     try:
         # NOTE - For e.g. MPI, or other network tasks, we do not use the
         # standard tempfile methods.  The path has to be accessible on all
@@ -1574,7 +1598,7 @@ def _run(programArgs):
                 try:
                     # Make the dir, if it already exists that's OK
                     os.mkdir(expDir)
-                except OSError, e:
+                except OSError as e:
                     if e.errno != 17:
                         raise
             else:
@@ -1588,7 +1612,7 @@ def _run(programArgs):
                     try:
                         os.mkdir(expDir)
                         break
-                    except OSError, e:
+                    except OSError as e:
                         # Already exists
                         if e.errno != 17:
                             raise
@@ -1597,13 +1621,14 @@ def _run(programArgs):
         tmpDirLink = os.path.join(resultsDirRun, 'git-results-tmp')
         try:
             os.symlink(os.path.abspath(expDir or '.'), tmpDirLink)
-        except OSError, e:
+        except OSError as e:
             # Already exists
             if e.errno != 17:
                 raise
 
+        cleanupResults = True
         try:
-            r, abrt = runExperiment(args, expDir,
+            r, abrt, wasMoveFailure = runExperiment(args, expDir,
                     os.path.dirname(args.tag_root), args.extra_file,
                     resultsDirRun, commitTag, args.trim)
             if r != 0:
@@ -1615,10 +1640,15 @@ def _run(programArgs):
                 # Supervisor will retry, make sure that the experiment's
                 # progress is NOT deleted
                 runWillRetry = args.isGoingToRetry
+
+            if wasMoveFailure:
+                # Prevent deleting of temporary files
+                cleanupResults = False
         finally:
-            if not runWillRetry:
+            cleanupResults = cleanupResults and not runWillRetry
+            if cleanupResults:
                 os.unlink(tmpDirLink)
-            if expDir is not None and not runWillRetry:
+            if expDir is not None and cleanupResults:
                 s = time.time()
                 failing = True
                 while time.time() - s < 10.0:
@@ -1628,7 +1658,7 @@ def _run(programArgs):
                         shutil.rmtree(expDir)
                         failing = False
                         break
-                    except OSError, e:
+                    except OSError as e:
                         # Directory not empty
                         if e.errno != 39:
                             raise
@@ -1645,7 +1675,7 @@ def _run(programArgs):
         checked([ "git", "tag", "-d", commitTag ], nonZeroOk = [ 1 ])
         try:
             os.unlink(datedLinkRun)
-        except OSError, e:
+        except OSError as e:
             # File does not exist is OK, we were just trying to delete it anyway
             if e.errno != 2:
                 raise
@@ -1656,7 +1686,7 @@ def _run(programArgs):
                     oldLink)) == os.path.abspath(resultsDirRun):
                 os.unlink(latestLinkRun)
                 safeRollback(os.path.dirname(latestLinkRun))
-        except OSError, e:
+        except OSError as e:
             # Link doesn't exist?
             if e.errno != 2:
                 raise
@@ -1709,7 +1739,7 @@ def _run(programArgs):
         shutil.rmtree(getPathForResumeKey(args.retryKey))
         os.unlink(os.path.join(resultsDirNew, "git-results-retry-key"))
 
-    if runFailed:
+    if runFailed or wasMoveFailure:
         sys.exit(1)
 
 

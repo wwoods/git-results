@@ -188,6 +188,11 @@ class Parser(ConfigParser):
     raises an exception if the file cannot be read.
     """
 
+    def __init__(self, *args, **kwargs):
+        defaults = { 'strict': False }
+        defaults.update(kwargs)
+        super(Parser, self).__init__(*args, **defaults)
+
     def optionxform(self, optionstr):
         return optionstr
 

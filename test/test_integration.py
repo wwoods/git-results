@@ -1,4 +1,6 @@
-
+# TODO - reprconf was modified to use ConfigParser(strict=False).  Would be good
+# if strict mode were enabled, though many changes in this file would be
+# required.
 
 from .common import GrTest, git_results, addExec, checked
 
@@ -211,7 +213,7 @@ class TestGitResults(GrTest):
             git_results.run(shlex.split("results/test/run -m 'woo'"))
         try:
             git_results.run(shlex.split("move results/test/run results/test/run2"))
-        except SystemExit, e:
+        except SystemExit as e:
             self.fail(str(e))
         self.assertEqual(False, os.path.lexists("results/test/run"))
         self.assertEqual(False, os.path.lexists(dateBase + "-test/run"))
@@ -226,7 +228,7 @@ class TestGitResults(GrTest):
         try:
             git_results.run(shlex.split("move results/blah results/blah2"))
             self.fail("No error raised")
-        except ValueError, e:
+        except ValueError as e:
             text = str(e)
         print("Got error: {}".format(text))
         self.assertTrue("Results folder 'results' not found" in text)
@@ -238,7 +240,7 @@ class TestGitResults(GrTest):
         try:
             git_results.run(shlex.split("move results/blah results/blah2"))
             self.fail("No error raised")
-        except ValueError, e:
+        except ValueError as e:
             text = str(e)
         print("Got error: {}".format(text))
         self.assertTrue("No result found under 'results/blah'" in text)
@@ -387,14 +389,14 @@ class TestGitResults(GrTest):
                 # Replace editor with bunk editor
                 os.environ['EDITOR'] = 'ls > /dev/null'
                 git_results.run(shlex.split("results/test/run"))
-            except ValueError, e:
+            except ValueError as e:
                 self.assertEqual("Commit message must be at least 5 "
                         "characters; got: ''", str(e))
 
             try:
                 os.environ['EDITOR'] = 'echo "Comm" >'
                 git_results.run(shlex.split("results/test/run"))
-            except ValueError, e:
+            except ValueError as e:
                 self.assertEqual("Commit message must be at least 5 "
                         "characters; got: 'Comm'", str(e))
 
@@ -409,7 +411,7 @@ class TestGitResults(GrTest):
             git_results.run(shlex.split("results/test/run2"))
             self.assertEqual("Hello, world\n",
                     open("results/test/run2/1/stdout").read())
-        except SystemExit, e:
+        except SystemExit as e:
             self.fail(str(e))
 
         '''
@@ -434,7 +436,7 @@ class TestGitResults(GrTest):
         try:
             git_results.run(shlex.split('results/test/run -m "Let\'s see if it '
                     'prints"'))
-        except SystemExit, e:
+        except SystemExit as e:
             self.fail(str(e))
 
         # Check that our commit properly ignored stuff
@@ -575,7 +577,7 @@ class TestGitResults(GrTest):
 
         try:
             git_results.run(shlex.split("r/a -m 'h'"))
-        except ValueError, e:
+        except ValueError as e:
             text = str(e)
         else:
             self.fail("Self-cycle passed rather than failing")
@@ -594,13 +596,15 @@ class TestGitResults(GrTest):
                 """, True)
         try:
             git_results.run(shlex.split("r/b -m 'h'"))
-        except ValueError, e:
+        except ValueError as e:
             text = str(e)
         else:
             self.fail("Cycle passed rather than failing")
 
         print("Got error: {}".format(text))
-        self.assertTrue("'a' seems cyclical on set(['a', 'b']): {b}" in text)
+        self.assertTrue(
+                "'a' seems cyclical on {'a', 'b'}: {b}" in text
+                or "'b' seems cyclical on {'b', 'a'}: {a}" in text)
 
 
     def test_continuation(self):
@@ -620,7 +624,7 @@ class TestGitResults(GrTest):
         def newMove(self, dir, trimCommonPaths = False):
             oldRename = os.rename
             def newRename(a, b):
-                print "RENAMING {}".format(a)
+                print("RENAMING {}".format(a))
                 if os.path.basename(a) == "blah":
                     raise OSError(88, "blah is a silly file")
                 else:
@@ -637,16 +641,32 @@ class TestGitResults(GrTest):
                     run = "echo yodel > alpha; echo gosh > blah; echo gee > cansas"
                     """)
 
+            ctmp = None
+            if os.path.lexists('results/.tmp'):
+                ctmp = os.listdir('results/.tmp')
+
             with self.assertRaises(SystemExit):
                 git_results.run(shlex.split("results/test/run -m 'h'"))
 
-            self.assertEqual(False, os.path.lexists("results/test/run/1"))
-            self.assertEqual(True, os.path.lexists("results/test/run/1-fail"))
-            self.assertEqual(True, os.path.lexists("results/test/run/1-fail/alpha"))
-            self.assertEqual(False, os.path.lexists("results/test/run/1-fail/blah"))
-            self.assertEqual(True, os.path.lexists("results/test/run/1-fail/cansas"))
+            self.assertEqual(True, os.path.lexists("results/test/run/1"))
+            self.assertEqual(False, os.path.lexists("results/test/run/1-fail"))
+            self.assertEqual(True, os.path.lexists("results/test/run/1/alpha"))
+            self.assertEqual(False, os.path.lexists("results/test/run/1/blah"))
+            self.assertEqual(True, os.path.lexists("results/test/run/1/cansas"))
             self.assertIn("blah: OSError: [Errno 88] blah is a silly file\n",
-                    open("results/test/run/1-fail/stderr").read())
+                    open("results/test/run/1/stderr").read())
+
+            # Ensure that the .tmp directory wasn't deleted
+            if ctmp is None:
+                self.assertEqual(True, os.path.lexists('results/.tmp'))
+            else:
+                self.assertNotEqual(ctmp, os.listdir('results/.tmp'))
+
+            # And that the blah file resides there
+            self.assertEqual(True, os.path.lexists(
+                    "results/test/run/1/git-results-tmp/blah"))
+            self.assertEqual(False, os.path.lexists(
+                    "results/test/run/1/git-results-tmp/alpha"))
         finally:
             git_results.FolderState.moveResultsTo = old
 
@@ -728,7 +748,7 @@ class TestGitResults(GrTest):
         self._setupRepo()
         try:
             git_results.run(shlex.split("-i wresults/in/place -m 'hmm'"))
-        except SystemExit, e:
+        except SystemExit as e:
             self.fail(str(e))
 
         self.assertEqual("Hello, world\n",
@@ -753,7 +773,7 @@ class TestGitResults(GrTest):
         # -p flag should work
         try:
             git_results.run(shlex.split('qresults/test/run -m "Take 2"'))
-        except SystemExit, e:
+        except SystemExit as e:
             self.fail(str(e))
 
         # Check that our commit properly ignored stuff
@@ -785,7 +805,7 @@ class TestGitResults(GrTest):
         try:
             git_results.run(shlex.split("results/test/run -m \"Let's see if it "
                     "prints\""))
-        except SystemExit, e:
+        except SystemExit as e:
             self.fail(str(e))
         self.assertEqual("Hello, world\n",
                 open("results/test/run/1/stdout").read())

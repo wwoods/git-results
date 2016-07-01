@@ -11,7 +11,7 @@ import unittest
 GR_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
         "../git-results")
 git_results = imp.new_module('git_results')
-exec open(GR_FILE).read() in git_results.__dict__
+exec(open(GR_FILE).read(), git_results.__dict__)
 sys.modules['git_results'] = git_results
 
 def addExec(fname):
@@ -33,7 +33,7 @@ class GrTest(unittest.TestCase):
         cls.rootDir = os.path.join(tempfile.gettempdir(), "git-results-test")
         try:
             os.makedirs(cls.rootDir)
-        except OSError, e:
+        except OSError as e:
             # Already exists?
             if e.errno != 17:
                 raise
@@ -58,7 +58,7 @@ class GrTest(unittest.TestCase):
     def initAndChdirTmp(self):
         try:
             shutil.rmtree("tmp")
-        except OSError, e:
+        except OSError as e:
             # Does not exist
             if e.errno != 2:
                 raise
