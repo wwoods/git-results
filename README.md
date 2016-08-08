@@ -198,6 +198,8 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2016-8-7 - Changed --extra-file to be local to working directory:local to
+  the git-results.cfg file used.
 * 2016-7-1 - An error while moving files will now preserve the temporary
   directory as well as symlinks to it, to prevent data loss.
 

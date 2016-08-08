@@ -525,6 +525,29 @@ class TestGitResults(GrTest):
             os.remove('someTestFile')
 
 
+    def test_extraFile_nonRoot(self):
+        self._setupRepo()
+        os.makedirs("round2")
+        self._config("""
+                [/r/blah]
+                run = "ls  && cp f a && cp ../f b"
+                """, cfgPath="round2/git-results.cfg")
+        with open("test1", 'w') as f:
+            f.write("1")
+        with open("test2", "w") as f:
+            f.write("2")
+        git_results.run(
+                shlex.split("round2/r/blah -m 'a' -x test1:f -x test2:../f"))
+        self.assertEqual(True, os.path.lexists("round2/r/blah/1"))
+        self.assertEqual(True, os.path.lexists("round2/r/blah/1/f"))
+        self.assertEqual("1", open("round2/r/blah/1/a").read())
+        self.assertEqual("2", open("round2/r/blah/1/b").read())
+        # These two files existed above git-results.cfg, so shouldn't be
+        # included
+        self.assertEqual(False, os.path.lexists("round2/r/blah/1/test1"))
+        self.assertEqual(False, os.path.lexists("round2/r/blah/1/test2"))
+
+
     def test_configVars(self):
         ## Ensure that configuration works
         self._setupRepo()
