@@ -209,6 +209,22 @@ def getPathForResumeKey(resumeKey, filename = None):
     return base
 
 
+def shellOpen(cmd):
+    """Returns a subprocess.Popen object with stdout and stderr redirected to
+    pipes, using the correct environment.
+
+    This is done so that the supervisor has consistency with what the user
+    runs.
+    """
+    osEnv = os.environ
+    env = {}
+    for k in [ 'HOME', 'LOGNAME', 'LANG' ]:
+        if k in osEnv:
+            env[k] = osEnv[k]
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, shell=True, env=env)
+
+
 def tee(infile, *files):
     """Thanks to http://stackoverflow.com/a/4985080/160205, tee lines from the
     given file to one or more other files.
@@ -431,7 +447,7 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
             cfgLeaf = os.path.dirname(args.tag_root)
             for f in extraFiles:
                 fFrm, fTo = f.split(':')
-                shutil.copy2(os.path.join(os.path.curdir, fFrm),
+                shutil.copy2(os.path.join(args.cwd, fFrm),
                         os.path.join(dir, cfgLeaf, fTo))
 
             # At this point, we have the directory with the right git-results-*.
@@ -442,12 +458,11 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
             if args.build:
                 print("Building {0} in {1}".format(commitTag, dirRelative))
                 # stderr redirection benefits nosetests, mainly.
-                p = subprocess.Popen(args.build,
-                        shell = True,
-                        stdout = subprocess.PIPE,
-                        stderr = subprocess.STDOUT)
+                p = shellOpen(args.build)
                 thread = tee(p.stdout, sys.stdout)
+                thread2 = tee(p.stderr, sys.stderr)
                 thread.join()
+                thread2.join()
                 r = p.wait()
                 if r != 0:
                     print("== BUILD FAILED ==")
@@ -515,9 +530,7 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
                 """Returns the monotonically increasing, floating-point number
                 that denotes progress.  If retry_until_stall is set, also
                 updates the progress file associated with the retry."""
-                p = subprocess.Popen(args.progress, shell = True,
-                        stdout = subprocess.PIPE,
-                        stderr = subprocess.PIPE)
+                p = shellOpen(args.progress)
                 stdout, stderr = p.communicate()
                 stdout = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
@@ -548,9 +561,7 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
         output = open('{0}/stdout'.format(resultsDir), 'a', line_buffered)
         error = open('{0}/stderr'.format(resultsDir), 'a', line_buffered)
         try:
-            p = subprocess.Popen(args.run,
-                    shell = True, stdout = subprocess.PIPE,
-                    stderr = subprocess.PIPE)
+            p = shellOpen(args.run)
             iothreads = [ tee(p.stdout, output, sys.stdout),
                     tee(p.stderr, error, sys.stderr) ]
             [ t.join() for t in iothreads ]
@@ -1521,8 +1532,9 @@ def _run(programArgs):
             "dated" is an invalid option, as that is a unique folder created by
             git-results to help with indexing results by date.
             "latest" is invalid as well, referring to another unique folder."""))
-    ap.add_argument("--version", action="version", version="0.1.0")
+    ap.add_argument("--version", action="version", version="0.2.0")
     args = ap.parse_args(programArgs)
+    args.cwd = os.getcwd()
 
     if args.internal_retry_continue:
         # args.tag is our key for resuming a paused experiment.

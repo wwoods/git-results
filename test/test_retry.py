@@ -46,8 +46,13 @@ class TestRetry(GrTest):
     def test_manualResume_fail(self):
         self._setupRepo()
         with open("run.py", "w") as f:
-            f.write("#! /usr/bin/env python2\n")
-            f.write("raise Exception('Booo!')\n")
+            f.write(textwrap.dedent(r"""
+                    #! /usr/bin/env python2
+                    import os
+                    with open('test', 'w') as f:
+                        f.write("WOO")
+                    raise Exception('Booo!')
+                    """))
         with self.assertRaises(SystemExit):
             git_results.run(shlex.split("results/test -m a"))
         key = open('results/test/1-run/git-results-retry-key').read()
@@ -68,10 +73,12 @@ class TestRetry(GrTest):
         with self.assertRaises(SystemExit):
             git_results.run(shlex.split("{} --internal-retry-continue".format(
                     key)))
+        # 3rd failure without progress:
+        self.assertEqual(False, os.path.lexists(keyFolder))
         os.chdir(odir)
         # Make sure it got closed and moved to the 1-fail folder
         self.assertEqual('', open('results/test/1-fail/stdout').read())
-        self.assertEqual(False, os.path.lexists(keyFolder))
+        self.assertEqual('WOO', open('results/test/1-fail/test').read())
 
 
     def test_manualResume_ok(self):

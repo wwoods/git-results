@@ -198,6 +198,11 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2016-8-8 - Supervisor (and other experiments) now run in a minimal
+  environment, like cron.  This was done to prevent experiments from working
+  when run from the terminal, but failing when the supervisor runs them.
+
+  Version set to 0.2.0.
 * 2016-8-7 - Changed --extra-file to be local to working directory:local to
   the git-results.cfg file used.
 * 2016-7-1 - An error while moving files will now preserve the temporary

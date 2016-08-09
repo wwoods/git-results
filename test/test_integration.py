@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import textwrap
 
 def checkTag(tag):
@@ -638,6 +639,42 @@ class TestGitResults(GrTest):
         shutil.rmtree("results/test/run/1")
         git_results.run(shlex.split("results/test/run -m 'h'"))
         self.assertEqual(True, os.path.lexists("results/test/run/3"))
+
+
+    def test_env(self):
+        # Ensure that the environment of build / run / progress is different
+        # from our environment.
+        self._setupRepo()
+        self._config("""
+                [/results]
+                run = "/bin/echo Lucky was $LUCKY"
+                """)
+        os.environ['LUCKY'] = '7'
+
+        # Ensure behavior works without fix
+        old = git_results.shellOpen
+        def new(cmd):
+            return subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE)
+        git_results.shellOpen = new
+        try:
+            git_results.run(shlex.split("results/t -m 'h'"))
+            self.assertEqual("Lucky was 7\n",
+                    open('results/t/1/stdout').read())
+        finally:
+            git_results.shellOpen = old
+
+        # Ensure LUCKY is NOT present
+        git_results.run(shlex.split("results/t -m 'h'"))
+        self.assertEqual("Lucky was\n", open('results/t/2/stdout').read())
+
+        # But show that LUCKY can be passed:
+        self._config("""
+                [/results]
+                run = "LUCKY=8 /bin/bash -c '/bin/echo Lucky was $LUCKY'"
+                """)
+        git_results.run(shlex.split("results/t -m 'h'"))
+        self.assertEqual("Lucky was 8\n", open('results/t/3/stdout').read())
 
 
     def test_failToMoveResults(self):
