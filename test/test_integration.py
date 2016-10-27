@@ -142,18 +142,27 @@ class TestGitResults(GrTest):
                 run = "./test"
                 ignore = [ "a", "!e/a", "/e/b", "/**/c" ]
                 """)
+        os.makedirs("sub")
+        self._config(r"""
+                [/]
+                run = "../test"
+                ignore = [ "a", "!e/a", "/e/b", "/**/c" ]
+                """, cfgPath="sub/git-results.cfg")
 
         git_results.run(shlex.split("r/test -m 'Woo'"))
-        self.assertEqual(False, os.path.lexists("r/test/1/a"))
-        self.assertEqual(True, os.path.lexists("r/test/1/b"))
-        self.assertEqual(True, os.path.lexists("r/test/1/c"))
-        self.assertEqual(True, os.path.lexists("r/test/1/d"))
-        self.assertEqual(False, os.path.lexists("r/test/1/d/a"))
-        self.assertEqual(True, os.path.lexists("r/test/1/d/b"))
-        self.assertEqual(True, os.path.lexists("r/test/1/e/a"))
-        self.assertEqual(False, os.path.lexists("r/test/1/e/b"))
-        self.assertEqual(True, os.path.lexists("r/test/1/f/e/a"))
-        self.assertEqual(True, os.path.lexists("r/test/1/f/e/b"))
+        git_results.run(shlex.split("sub/r/test -m 'Woo'"))
+        for root in [ 'r/test/1', 'sub/r/test/1' ]:
+            print("Looking at {}".format(root))
+            self.assertEqual(False, os.path.lexists(root + "/a"))
+            self.assertEqual(True, os.path.lexists(root + "/b"))
+            self.assertEqual(True, os.path.lexists(root + "/c"))
+            self.assertEqual(True, os.path.lexists(root + "/d"))
+            self.assertEqual(False, os.path.lexists(root + "/d/a"))
+            self.assertEqual(True, os.path.lexists(root + "/d/b"))
+            self.assertEqual(True, os.path.lexists(root + "/e/a"))
+            self.assertEqual(False, os.path.lexists(root + "/e/b"))
+            self.assertEqual(True, os.path.lexists(root + "/f/e/a"))
+            self.assertEqual(True, os.path.lexists(root + "/f/e/b"))
 
 
     def test_link(self):
