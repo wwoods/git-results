@@ -25,7 +25,10 @@ class TestRetry(GrTest):
                     [/]
                     run = "python run.py"
                     progress = "cat work | wc -l"
-                    progressDelay = 0
+                    # Some networked file systems don't do well when comparing
+                    # time() to file stamps... allow up to two minutes of
+                    # tolerance for testing purposes.
+                    progressDelay = -120.
                     """))
 
 

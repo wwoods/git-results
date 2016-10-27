@@ -124,6 +124,38 @@ class TestGitResults(GrTest):
         self.assertEqual("results/t2\n", open("results/t2/1/run").read())
 
 
+    def test_ignore(self):
+        self._setupRepo()
+        with open("test", "w") as f:
+            f.write(r"""
+                    set -e
+                    touch a; touch b; touch c;
+                    mkdir d; touch d/a; touch d/b;
+                    mkdir e; touch e/a; touch e/b;
+                    mkdir f;
+                        mkdir f/e; touch f/e/a; touch f/e/b; touch f/e/c;
+                    """)
+        addExec("test")
+        self._config(r"""
+                [/]
+                build = None
+                run = "./test"
+                ignore = [ "a", "!e/a", "/e/b", "/**/c" ]
+                """)
+
+        git_results.run(shlex.split("r/test -m 'Woo'"))
+        self.assertEqual(False, os.path.lexists("r/test/1/a"))
+        self.assertEqual(True, os.path.lexists("r/test/1/b"))
+        self.assertEqual(True, os.path.lexists("r/test/1/c"))
+        self.assertEqual(True, os.path.lexists("r/test/1/d"))
+        self.assertEqual(False, os.path.lexists("r/test/1/d/a"))
+        self.assertEqual(True, os.path.lexists("r/test/1/d/b"))
+        self.assertEqual(True, os.path.lexists("r/test/1/e/a"))
+        self.assertEqual(False, os.path.lexists("r/test/1/e/b"))
+        self.assertEqual(True, os.path.lexists("r/test/1/f/e/a"))
+        self.assertEqual(True, os.path.lexists("r/test/1/f/e/b"))
+
+
     def test_link(self):
         # Check linking
         self._setupRepo()

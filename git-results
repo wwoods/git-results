@@ -7,6 +7,7 @@ from __future__ import print_function
 import argparse
 import collections
 import datetime
+import fnmatch
 import inspect
 import os
 import pickle
@@ -145,7 +146,31 @@ class FolderState(object):
         for ext in self._args.ignoreExt:
             if path.endswith('.' + ext):
                 return True
-        return False
+
+        # Ignore logic
+        relPath = os.path.relpath(path, self._dir)
+        excluded = False
+        for ext in self._args.ignore:
+            negate = False
+            if ext.startswith('!'):
+                negate = True
+                ext = ext[1:]
+
+            if '/' in ext:
+                if ext.startswith('/'):
+                    ext = '^' + ext[1:]
+                r = re.compile(ext
+                        .replace('\\*', '\\\\<STAR>')
+                        .replace('**', '.\\<STAR>')
+                        .replace('*', '[^/]\\<STAR>')
+                        .replace('\\<STAR>', '*')
+                )
+            else:
+                r = re.compile(fnmatch.translate(ext))
+
+            if r.search(relPath) is not None:
+                excluded = not negate
+        return excluded
 
 
     def _scan(self, path):
@@ -1018,6 +1043,7 @@ def _parseConfig(args, tagRoot, tagLeaf):
 
     parms = {
             'build': None,
+            'ignore': [],
             'ignoreExt': [ "pyc", "pyo", "swp" ],
             'progress': None,
             'progressTries': 3,
@@ -1094,6 +1120,9 @@ def _parseConfig(args, tagRoot, tagLeaf):
 
     # Finally apply those kwargs onto args
     args.build = parms['build']
+    args.ignore = parms['ignore']
+    if not isinstance(args.ignore, collections.Iterable):
+        raise ValueError("ignore must be iterable: {}".format(args.ignore))
     args.ignoreExt = parms['ignoreExt']
     if not isinstance(args.ignoreExt, collections.Iterable):
         raise ValueError("ignoreExt must be iterable: {}".format(
@@ -1532,7 +1561,7 @@ def _run(programArgs):
             "dated" is an invalid option, as that is a unique folder created by
             git-results to help with indexing results by date.
             "latest" is invalid as well, referring to another unique folder."""))
-    ap.add_argument("--version", action="version", version="0.2.0")
+    ap.add_argument("--version", action="version", version="0.2.1")
     args = ap.parse_args(programArgs)
     args.cwd = os.getcwd()
 
