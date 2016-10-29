@@ -3,7 +3,7 @@ git-results
 
 A helper script / git extension for cataloguing computation results
 
-Version 0.1.0.
+Version 0.2.1.
 
 ## Installation
 
@@ -56,6 +56,10 @@ vars = { "cmd": "python test.py arg" }
 
 # Ignore results files from this list of extensions.  This is the default list:
 ignoreExt = [ "pyc", "pyo", "swp" ]
+
+# Ignore results files matching this glob (similar to .gitignore files)
+# Default is an empty list [].
+ignore = [ "*.chkpt*" ]
 
 # Trim result paths aggressively?  False if unspecified.
 # That is, if the application creates folder results/a.txt, then since
@@ -198,6 +202,11 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2016-10-27 - Supervisor / internal retry will no longer automatically mark an experiment that keeps failing as failed.  It will instead rename the folder with -manual-retry, which requires that the user run `git results supervisor --manual` and enter `Y` to the prompt asking them to resume the experiment.
+
+  Also added ignore=['*.txt', '/tmp/*.blah'] option to git-results.cfg.  Any files matching the given globs will not be copied as results.  Syntax is similar to `.gitignore` files: https://git-scm.com/docs/gitignore.
+
+  Version set to 0.2.1.
 * 2016-8-8 - Supervisor (and other experiments) now run in a minimal
   environment, like cron.  This was done to prevent experiments from working
   when run from the terminal, but failing when the supervisor runs them.
@@ -235,7 +244,7 @@ Changelog
   is checked in .gitignore, etc).  Prompts are given for updating .gitignore.
   git-results-build and git-results-run are now version controlled.
 * 2015-2-26 - If a folder is deleted and experiments are run again, will
-  correctly remove tags and folders from partially-created experiments.  
+  correctly remove tags and folders from partially-created experiments.
   Consults INDEX file for next index to allocate.
 * 2015-1-7 - Fixed up crashes during filesystem move in two ways: First, all
   files that can be copied are copied before an error is reported.  Second,

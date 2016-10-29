@@ -34,10 +34,14 @@ class __dummy(object):
 sys.modules['git_results'] = inspect.getmodule(__dummy)
 __name__ = 'git_results'
 
+if sys.version_info[0] > 2:
+    raw_input = input
+
 ABORT_SUFFIX = '-abrt'
 FAIL_SUFFIX = '-fail'
 RUN_SUFFIX = '-run'
-SUFFIXES = [ ABORT_SUFFIX, FAIL_SUFFIX, RUN_SUFFIX, '' ]
+MANUAL_SUFFIX = '-manual-retry'
+SUFFIXES = [ ABORT_SUFFIX, FAIL_SUFFIX, RUN_SUFFIX, MANUAL_SUFFIX, '' ]
 # Overridden by tests to suppress raw_input
 IS_TEST = False
 
@@ -49,6 +53,7 @@ class IndexStates(object):
     OK = '  ok'
     MOVE = 'move'
     RUN = ' run'
+    MANUAL = 'rtry'
 for key, val in IndexStates.__dict__.items():
     if key[0] == '_':
         continue
@@ -435,6 +440,9 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
     odir = os.getcwd()
     if dir is not None:
         os.chdir(dir)
+    # Output files, will be opened later
+    output = None
+    error = None
     try:
         # Timers
         preBuild = preRun = None
@@ -580,6 +588,7 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
             threads.append(hbThread)
 
         iothreads = []
+        # Name of abort type, if applicable, or False for no abort type
         didAbort = False
         # Special handling for our runner script
         line_buffered = 1
@@ -597,7 +606,8 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
                     "CTRL+C semantics")
             [ t.join() for t in iothreads ]
             r = p.wait()
-            didAbort = True
+            didAbort = "abort"
+        # output, error are both closed in outer finally
 
         allDone = time.time()
         print("=" * 79)
@@ -632,8 +642,10 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
                             args.isGoingToRetry = True
                             writeRetryStats()
                         else:
-                            # Cannot retry!
-                            pass
+                            # Cannot retry!  Switch to manual mode
+                            args.isGoingToRetry = True
+                            writeRetryStats()
+                            didAbort = "manual"
                     else:
                         # Progress!
                         lastProgress = newProgress
@@ -674,6 +686,10 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
 
         return r, didAbort, wasMoveFailure
     finally:
+        if output:
+            output.close()
+        if error:
+            error.close()
         os.chdir(odir)
 
 
@@ -1426,6 +1442,7 @@ def _runSupervisor(args):
             "scheduler).  Retries experiments started with --retry-until-stall "
             "or -r if they are no longer running.")
     ap.add_argument("-v", "--verbose", action = 'store_true')
+    ap.add_argument("--manual", action='store_true')
     args = ap.parse_args(args)
     retryDir = os.path.join(os.path.expanduser("~"), ".gitresults")
 
@@ -1482,12 +1499,41 @@ def _runSupervisor(args):
             deleteExp(".git folder containing experiment no longer exists: {}"
                     .format(expArgs.base))
             continue
+
+        isManual = False
         if not hasattr(expArgs, 'setupInfo'):
             print("Experiment did not finish setup, OK")
         elif not os.path.lexists(expArgs.setupInfo[0]):
-            deleteExp("Results directory no longer exists: {}".format(
-                    expArgs.setupInfo[0]))
+            # Might be manual resume, check it
+            if os.path.lexists(expArgs.setupInfo[0][:-4] + MANUAL_SUFFIX):
+                isManual = True
+            else:
+                deleteExp("Results directory no longer exists: {}".format(
+                        expArgs.setupInfo[0]))
+                continue
+
+        if isManual != args.manual:
             continue
+
+        if isManual:
+            oname = expArgs.setupInfo[0]
+            nname = expArgs.setupInfo[0][:-4] + MANUAL_SUFFIX
+            if not IS_TEST:
+                r = ""
+                while (not r.strip()
+                        or r.strip()[0].lower() not in [ 'y', 'n' ]):
+                    r = raw_input(
+                            "git-results supervisor is considering "
+                                "restarting: \n"
+                            "{}\n\n"
+                            "Would you like to retry this experiment? (y/n) "
+                            .format(nname))
+                if r.strip()[0] != 'y':
+                    print("SKIPPING")
+                    continue
+                print("RETRYING")
+            # Ok, retry it
+            os.rename(nname, oname)
 
         # Note - we allow a 1 second offset since file system times are rounded,
         # which can cause us issues.
@@ -1676,7 +1722,7 @@ def _run(programArgs):
             if r != 0:
                 runFailed = True
                 if abrt:
-                    runFailed = "abort"
+                    runFailed = abrt
 
             if args.retry_until_stall:
                 # Supervisor will retry, make sure that the experiment's
@@ -1743,7 +1789,14 @@ def _run(programArgs):
         sys.exit(1)
 
     if runWillRetry:
-        print("Exiting without cleaning up, supervisor will retry")
+        if runFailed != "manual":
+            print("Exiting without cleaning up, supervisor will retry")
+        else:
+            # Switch to manual mode
+            print("Exiting without cleaning up, but supervisor will NOT retry."
+                    "\n\nTo retry, run `git results supervisor --manual`.")
+            resultsDirNew = resultsDir + MANUAL_SUFFIX
+            os.rename(resultsDirRun, resultsDirNew)
         sys.exit(2)
 
     # Move the RUN_SUFFIX folder to the appropriate suffix
@@ -1757,6 +1810,10 @@ def _run(programArgs):
         if runFailed == "abort":
             newSuffix = ABORT_SUFFIX
             indState = IndexStates.ABORT
+        elif runFailed is True:
+            pass
+        else:
+            raise NotImplementedError(runFailed)
     resultsDirNew = resultsDir + newSuffix
 
     print("Moving {0} to {1}".format(resultsDirRun, resultsDirNew))

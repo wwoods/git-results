@@ -76,12 +76,42 @@ class TestRetry(GrTest):
         with self.assertRaises(SystemExit):
             git_results.run(shlex.split("{} --internal-retry-continue".format(
                     key)))
-        # 3rd failure without progress:
-        self.assertEqual(False, os.path.lexists(keyFolder))
+        # 3rd failure without progress; should switch to manual mode
+        self.assertEqual(True, os.path.lexists(keyFolder))
         os.chdir(odir)
         # Make sure it got closed and moved to the 1-fail folder
-        self.assertEqual('', open('results/test/1-fail/stdout').read())
-        self.assertEqual('WOO', open('results/test/1-fail/test').read())
+        self.assertEqual('', open('results/test/1-manual-retry/stdout').read())
+        self.assertEqual('WOO',
+                open('results/test/1-manual-retry/git-results-tmp/test')
+                .read())
+
+        # Ensure that supervisor --manual works... for now, it only retries, it
+        # will NOT prompt the user and cannot be used to fail an experiment.
+        with open('results/test/1-manual-retry/git-results-tmp/run.py', 'w') \
+                as f:
+            f.write(textwrap.dedent(r"""
+                    #! /usr/bin/env python2
+                    import os
+                    with open('test', 'w') as f:
+                        f.write("WOO2")
+                    raise Exception('Booo!')
+                    """))
+
+        # Start a new experiment that won't be at manual point yet, ensure only
+        # one gets started with and without manual flag
+        with self.assertRaises(SystemExit):
+            git_results.run(shlex.split("results/test -m a"))
+
+        started = git_results._runSupervisor(['--manual'])
+        self.assertEqual(1, len(started))
+        [ p.wait() for p in started ]
+        self.assertEqual("WOO2",
+                open("results/test/1-manual-retry/git-results-tmp/test")
+                .read())
+        started = git_results._runSupervisor([])
+        self.assertEqual(1, len(started))
+        [ p.wait() for p in started ]
+        self.assertTrue(os.path.lexists("results/test/2-run"))
 
 
     def test_manualResume_ok(self):

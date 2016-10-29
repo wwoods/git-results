@@ -105,6 +105,25 @@ class TestGitResults(GrTest):
         self.assertEqual("COOL\nCOOL\n", open("results/test/1/stdout").read())
 
 
+    def test_exception_output(self):
+        # Ensure that an exception gets logged...
+        self._setupRepo()
+        with open("test.py", "w") as f:
+            f.write("raise ValueError('yodel')")
+        self._config("""
+                [/]
+                run = "python test.py"
+                """)
+        with self.assertRaises(SystemExit):
+            git_results.run(shlex.split("results/t1 -m 't1'"))
+
+        self.assertEqual(True, os.path.lexists("results/t1/1-fail/stderr"))
+        err = open("results/t1/1-fail/stderr").read()
+        print(err)
+        self.assertIn("ValueError", err)
+        self.assertIn("yodel", err)
+
+
     def test_gitGetsTag(self):
         # Ensure that build and run both get the tag when {tag} is used so they
         # can do something with it
