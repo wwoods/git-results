@@ -1448,6 +1448,11 @@ def _runSupervisor(args):
 
     exps = os.path.lexists(retryDir) and os.listdir(retryDir) or []
 
+    def log(m):
+        print("{} {}".format(
+                datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                m))
+
     now = time.time()
     startedCount = 0
     # Used for tests
@@ -1461,7 +1466,7 @@ def _runSupervisor(args):
             continue
 
         def deleteExp(reason):
-            print("Deleting experiment {}: {}".format(retryKey, reason))
+            log("Deleting experiment {}: {}".format(retryKey, reason))
             shutil.rmtree(getPathForResumeKey(retryKey))
 
         if not os.path.lexists(getPathForResumeKey(retryKey, "settings")):
@@ -1479,7 +1484,7 @@ def _runSupervisor(args):
                     "settings"), 'rb').read(), encoding='bytes')
         except pickle.UnpicklingError:
             newDir = getPathForResumeKey("bad_" + retryKey)
-            print("Corrupt experiment {}, unpickle of settings failed.  Moving "
+            log("Corrupt experiment {}, unpickle of settings failed.  Moving "
                     "to {}".format(
                         retryKey, newDir))
             if os.path.lexists(newDir):
@@ -1502,7 +1507,7 @@ def _runSupervisor(args):
 
         isManual = False
         if not hasattr(expArgs, 'setupInfo'):
-            print("Experiment did not finish setup, OK")
+            log("Experiment did not finish setup, maybe OK?")
         elif not os.path.lexists(expArgs.setupInfo[0]):
             # Might be manual resume, check it
             if os.path.lexists(expArgs.setupInfo[0][:-4] + MANUAL_SUFFIX):
@@ -1529,9 +1534,9 @@ def _runSupervisor(args):
                             "Would you like to retry this experiment? (y/n) "
                             .format(nname))
                 if r.strip()[0] != 'y':
-                    print("SKIPPING")
+                    print("SKIPPING {}".format(nname))
                     continue
-                print("RETRYING")
+                print("RETRYING {}".format(nname))
             # Ok, retry it
             os.rename(nname, oname)
 
@@ -1539,7 +1544,7 @@ def _runSupervisor(args):
         # which can cause us issues.
         if now - expMtime >= expArgs.retry_delay - 1.0:
             # Launch it!
-            print("Resuming experiment {}".format(retryKey))
+            log("Resuming experiment {}".format(retryKey))
             startedCount += 1
             p = subprocess.Popen(shlex.split(
                     "git results --internal-retry-continue {}".format(
@@ -1552,7 +1557,7 @@ def _runSupervisor(args):
             allStarted.append(p)
 
     if args.verbose:
-        print("Supervisor finished; {} '-r' experiments restarted".format(
+        log("Supervisor finished; {} '-r' experiments restarted".format(
                 startedCount))
     return allStarted
 
