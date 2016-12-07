@@ -3,7 +3,7 @@ git-results
 
 A helper script / git extension for cataloguing computation results
 
-Version 0.2.1.
+Version 0.2.2.
 
 ## Installation
 
@@ -202,6 +202,7 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2016-12-7 - Supervisor ran as `git results supervisor --manual` now allows the user to abort an experiment rather than retry it.
 * 2016-10-27 - Supervisor / internal retry will no longer automatically mark an experiment that keeps failing as failed.  It will instead rename the folder with -manual-retry, which requires that the user run `git results supervisor --manual` and enter `Y` to the prompt asking them to resume the experiment.
 
   Also added ignore=['*.txt', '/tmp/*.blah'] option to git-results.cfg.  Any files matching the given globs will not be copied as results.  Syntax is similar to `.gitignore` files: https://git-scm.com/docs/gitignore.

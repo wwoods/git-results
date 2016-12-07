@@ -108,10 +108,30 @@ class TestRetry(GrTest):
         self.assertEqual("WOO2",
                 open("results/test/1-manual-retry/git-results-tmp/test")
                 .read())
+        self.assertTrue(os.path.lexists("results/test/2-run"))
         started = git_results._runSupervisor([])
         self.assertEqual(1, len(started))
         [ p.wait() for p in started ]
+        # Not yet at manual fail point, still marked as run
         self.assertTrue(os.path.lexists("results/test/2-run"))
+        key2 = open('results/test/2-run/git-results-retry-key').read()
+        keyFolder2 = os.path.join(os.path.expanduser('~/.gitresults/'), key2)
+        # Abort that experiment so it doesn't mess up future tests
+        shutil.rmtree(keyFolder2)
+
+        # Abort
+        git_results.IS_TEST_FAIL_MANUAL = True
+        try:
+            self.assertEqual(True, os.path.lexists(keyFolder))
+            started = git_results._runSupervisor(['--manual'])
+            self.assertEqual(1, len(started))
+            [ p.wait() for p in started ]
+            self.assertTrue(os.path.lexists("results/test/1-abrt"))
+            self.assertTrue(os.path.lexists("results/test/1-abrt/test"))
+            self.assertEqual("WOO2", open("results/test/1-abrt/test").read())
+            self.assertFalse(os.path.lexists(keyFolder))
+        finally:
+            git_results.IS_TEST_FAIL_MANUAL = False
 
 
     def test_manualResume_ok(self):

@@ -44,6 +44,7 @@ MANUAL_SUFFIX = '-manual-retry'
 SUFFIXES = [ ABORT_SUFFIX, FAIL_SUFFIX, RUN_SUFFIX, MANUAL_SUFFIX, '' ]
 # Overridden by tests to suppress raw_input
 IS_TEST = False
+IS_TEST_FAIL_MANUAL = False
 
 class IndexStates(object):
     ABORT = 'abrt'
@@ -594,18 +595,22 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
         line_buffered = 1
         output = open('{0}/stdout'.format(resultsDir), 'a', line_buffered)
         error = open('{0}/stderr'.format(resultsDir), 'a', line_buffered)
-        try:
-            p = shellOpen(args.run)
-            iothreads = [ tee(p.stdout, output, sys.stdout),
-                    tee(p.stderr, error, sys.stderr) ]
-            [ t.join() for t in iothreads ]
-            r = p.wait()
-        except KeyboardInterrupt:
-            # Child got Ctrl+C,
-            print("== CTRL+C caught by git-results; child should exit as per "
-                    "CTRL+C semantics")
-            [ t.join() for t in iothreads ]
-            r = p.wait()
+        if not args.internal_retry_abort:
+            try:
+                p = shellOpen(args.run)
+                iothreads = [ tee(p.stdout, output, sys.stdout),
+                        tee(p.stderr, error, sys.stderr) ]
+                [ t.join() for t in iothreads ]
+                r = p.wait()
+            except KeyboardInterrupt:
+                # Child got Ctrl+C,
+                print("== CTRL+C caught by git-results; child should exit as per "
+                        "CTRL+C semantics")
+                [ t.join() for t in iothreads ]
+                r = p.wait()
+                didAbort = "abort"
+        else:
+            r = 1
             didAbort = "abort"
         # output, error are both closed in outer finally
 
@@ -750,11 +755,12 @@ def setupExperiment(args, repoBase, resultsRoot, resultsLeaf, message):
     experimentDir = os.path.join(resultsDir, resultsLeaf)
     if not os.path.lexists(os.path.join(resultsDir, ".gitignore")):
         if not IS_TEST:
-            r = raw_input(("To do this, git-results needs to make a new "
+            r = raw_input("To do this, git-results needs to make a new "
                     "results directory:\n\n{0}\n\nin repository {1}.\nIt will "
                     "also be added to the repository's .gitignore.  Is "
-                    "this ok? (y/n) ").format(resultsRoot, repoBase))
-            if not r.strip() or r.strip()[0].lower() != 'y':
+                    "this ok? (y/n) ".format(resultsRoot, repoBase))
+            r = r.strip().lower()
+            if r != 'y':
                 raise SystemExit("y not entered")
         safeMake(resultsDir)
         # If we don't make a file, it looks like results is always ignored even
@@ -1520,40 +1526,67 @@ def _runSupervisor(args):
         if isManual != args.manual:
             continue
 
+        # Extra flags passed to git-results when running this experiment
+        forceAbortFlag = [""]
         if isManual:
             oname = expArgs.setupInfo[0]
             nname = expArgs.setupInfo[0][:-4] + MANUAL_SUFFIX
+            def checkAbort():
+                """Inner function for failing this experiment.
+
+                Returns: True if failed, False if not"""
+                if not IS_TEST:
+                    r = ""
+                    while r not in [ 'y', 'n' ]:
+                        r = raw_input("Should git-results abort this "
+                                "experiment permanently? (y/n) ")
+                        r = r.strip().lower()
+                    if r == 'n':
+                        return False
+
+                # If we reach this point, should fail the experiment
+                # permanently.
+                forceAbortFlag[0] = "--internal-retry-abort"
+                return True
             if not IS_TEST:
                 r = ""
-                while (not r.strip()
-                        or r.strip()[0].lower() not in [ 'y', 'n' ]):
+                while r not in [ 'y', 'n' ]:
                     r = raw_input(
                             "git-results supervisor is considering "
                                 "restarting: \n"
                             "{}\n\n"
                             "Would you like to retry this experiment? (y/n) "
                             .format(nname))
-                if r.strip()[0] != 'y':
-                    print("SKIPPING {}".format(nname))
+                    r = r.strip().lower()
+                if r != 'y':
+                    if not checkAbort():
+                        print("SKIPPING {}".format(nname))
+                        continue
+                else:
+                    print("RETRYING {}".format(nname))
+            elif IS_TEST_FAIL_MANUAL:
+                if not checkAbort():
                     continue
-                print("RETRYING {}".format(nname))
             # Ok, retry it
             os.rename(nname, oname)
 
         # Note - we allow a 1 second offset since file system times are rounded,
         # which can cause us issues.
-        if now - expMtime >= expArgs.retry_delay - 1.0:
+        if now - expMtime >= expArgs.retry_delay - 1.0 or forceAbortFlag[0]:
             # Launch it!
-            log("Resuming experiment {}".format(retryKey))
+            log("{} experiment {}".format(
+                    "Resuming" if not forceAbortFlag[0] else "Aborting",
+                    retryKey))
             startedCount += 1
             p = subprocess.Popen(shlex.split(
-                    "git results --internal-retry-continue {}".format(
-                        retryKey)), stdout = subprocess.PIPE,
+                    "git results {} --internal-retry-continue {}".format(
+                        forceAbortFlag[0], retryKey)), stdout = subprocess.PIPE,
                     stderr = subprocess.PIPE)
-            # Note - the ONLY reason that we tee these threads is so that
-            # nosetests will capture their output.
-            iothreads = [ tee(p.stdout, sys.stdout),
-                    tee(p.stderr, sys.stderr) ]
+            if not forceAbortFlag[0]:
+                # Note - the ONLY reason that we tee these threads is so that
+                # nosetests will capture their output.
+                iothreads = [ tee(p.stdout, sys.stdout),
+                        tee(p.stderr, sys.stderr) ]
             allStarted.append(p)
 
     if args.verbose:
@@ -1605,6 +1638,8 @@ def _run(programArgs):
     ap.add_argument("--internal-retry-continue", action = 'store_true',
             help = "Used by supervisor, resumes a previously aborted experiment.  "
             "Uses the corresponding values saved in ~/.gitresults/[tagKey]/settings")
+    ap.add_argument("--internal-retry-abort", action="store_true",
+            help = "Used by supervisor to manually abort experiments.")
     ap.add_argument("tag", help = textwrap.dedent("""
             Path to organize these results under.  For instance, giving a tag of parity/squids
             will create a git tag for the commit as parity/squids, and will create the
@@ -1612,14 +1647,17 @@ def _run(programArgs):
             "dated" is an invalid option, as that is a unique folder created by
             git-results to help with indexing results by date.
             "latest" is invalid as well, referring to another unique folder."""))
-    ap.add_argument("--version", action="version", version="0.2.1")
+    ap.add_argument("--version", action="version", version="0.2.2")
     args = ap.parse_args(programArgs)
     args.cwd = os.getcwd()
 
     if args.internal_retry_continue:
         # args.tag is our key for resuming a paused experiment.
+        # Preserve internal_retry_abort!
+        ofail = args.internal_retry_abort
         args = pickle.loads(open(getPathForResumeKey(args.tag, "settings"),
                 'rb').read(), encoding='bytes')
+        args.internal_retry_abort = ofail
     else:
         # Starting a new experiment
         _processTagArgs(args, "tag")
