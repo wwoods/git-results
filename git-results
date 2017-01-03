@@ -97,6 +97,10 @@ class FolderState(object):
                     while not c.startswith(prefix):
                         prefix = os.path.dirname(prefix)
 
+            # If only one file remains, the common path is its folder
+            if not os.path.isdir(prefix):
+                prefix = os.path.dirname(prefix)
+
         allErrors = []
         for c in allChanges:
             # Add 1 to len(prefix) so that we don't include the preceding slash,
@@ -1647,7 +1651,7 @@ def _run(programArgs):
             "dated" is an invalid option, as that is a unique folder created by
             git-results to help with indexing results by date.
             "latest" is invalid as well, referring to another unique folder."""))
-    ap.add_argument("--version", action="version", version="0.2.2")
+    ap.add_argument("--version", action="version", version="0.2.3")
     args = ap.parse_args(programArgs)
     args.cwd = os.getcwd()
 
