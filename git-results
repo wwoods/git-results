@@ -464,7 +464,7 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
             buildHeartbeat = None
             if args.retry_until_stall:
                 def hbUpdate():
-                    tsleep = args.retry_delay / 3.0
+                    tsleep = max(1e-2, args.retry_delay / 3.0)
                     touch(getPathForResumeKey(args.retryKey, "heartbeat"))
                     while not buildHeartbeatStop:
                         time.sleep(tsleep)
@@ -583,7 +583,8 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
         if args.retry_until_stall:
             # Update heartbeats
             def hbUpdate():
-                tsleep = args.retry_delay / 3.0
+                tsleep = max(1e-2, args.retry_delay / 3.0)
+                touch(getPathForResumeKey(args.retryKey, "heartbeat"))
                 while not threadsShouldDie:
                     time.sleep(tsleep)
                     touch(getPathForResumeKey(args.retryKey, "heartbeat"))
