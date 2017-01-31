@@ -31,6 +31,7 @@ class GrTest(unittest.TestCase):
         sys.stderr = sys.stdout
 
         cls.rootDir = os.path.join(tempfile.gettempdir(), "git-results-test")
+        cls.rootDir = "/stash/tlab/wwoods/git-results-test"
         try:
             os.makedirs(cls.rootDir)
         except OSError as e:
@@ -56,11 +57,14 @@ class GrTest(unittest.TestCase):
 
 
     def initAndChdirTmp(self):
+        # Already chdir'd to /tmp
+        tmpPath = "tmp"
         try:
-            shutil.rmtree("tmp")
+            shutil.rmtree(tmpPath)
         except OSError as e:
             # Does not exist
             if e.errno != 2:
                 raise
-        git_results.safeMake("tmp")
-        os.chdir("tmp")
+        git_results.safeMake(tmpPath)
+        os.chdir(tmpPath)
+
