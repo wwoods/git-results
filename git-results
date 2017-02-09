@@ -266,11 +266,37 @@ def tee(infile, *files):
     """
     def fanout():
         for line in iter(infile.readline, b''):
-            assert isinstance(line, bytes)
-            line = line.decode('utf-8')
+            try:
+                assert isinstance(line, bytes)
+                line = line.decode('utf-8')
+            except:
+                line = (">>>>>>> git-results begin\n"
+                        "{}\n"
+                        ">>>>>>> git-results end\n").format(
+                        traceback.format_exc())
 
             for f in files:
-                f.write(line)
+                try:
+                    f.write(line)
+                except:
+                    # We can use below to log the exception.  However, often
+                    # this situation is caused by e.g. stderr being closed by
+                    # the OS when launched via cron (because the cron process
+                    # closes).  Unless evidence is found that the file versions
+                    # of stdout and stderr are lacking text, it's probably best
+                    # to silently accept a closed stream and move on.
+
+                    # Can't do much about a closed stderr or stdout
+                    if f is sys.stderr or f is sys.stdout:
+                        continue
+
+                    tb = (">>>>>>> git-results begin\n"
+                            "{}\n"
+                            "\nWhile writing to {}: {}"
+                            ">>>>>>> git-results-end\n").format(
+                            traceback.format_exc(), f, line)
+                    with open(os.path.expanduser("~/git-results.log"), "a") as f2:
+                        f2.write(tb)
         infile.close()
     t = threading.Thread(target = fanout)
     t.daemon = True
@@ -1652,7 +1678,7 @@ def _run(programArgs):
             "dated" is an invalid option, as that is a unique folder created by
             git-results to help with indexing results by date.
             "latest" is invalid as well, referring to another unique folder."""))
-    ap.add_argument("--version", action="version", version="0.2.3")
+    ap.add_argument("--version", action="version", version="0.2.4")
     args = ap.parse_args(programArgs)
     args.cwd = os.getcwd()
 

@@ -30,8 +30,12 @@ class GrTest(unittest.TestCase):
         cls._OLD_STDERR = sys.stderr
         sys.stderr = sys.stdout
 
+        base = os.path.expanduser('~/.gitresults')
+        for fname in os.listdir(base):
+            if fname.startswith("rtest"):
+                shutil.rmtree(os.path.join(base, fname))
+
         cls.rootDir = os.path.join(tempfile.gettempdir(), "git-results-test")
-        cls.rootDir = "/stash/tlab/wwoods/git-results-test"
         try:
             os.makedirs(cls.rootDir)
         except OSError as e:

@@ -1,12 +1,31 @@
 
+import multiprocessing
 import os
 import shlex
 import shutil
+import sys
 import tempfile
 import textwrap
 import time
 
 from .common import GrTest, git_results, addExec, checked
+
+def _other_git_results_inner(key):
+    oldShell = git_results.shellOpen
+    def newShell(cmd):
+        p = oldShell(cmd)
+        sys.stderr.close()
+        return p
+    git_results.shellOpen = newShell
+    git_results.run(['--internal-retry-continue', key])
+def _other_git_results(key):
+    """Runs git results --internal-retry-continue in another process with its
+    own stderr closed.
+    """
+    m = multiprocessing.Process(target=_other_git_results_inner, args=(key,))
+    m.start()
+    m.join()
+
 
 class TestRetry(GrTest):
     def _setupRepo(self):
@@ -30,6 +49,19 @@ class TestRetry(GrTest):
                     # tolerance for testing purposes.
                     progressDelay = -120.
                     """))
+
+
+    def test_manualResume_keepsLoggingIfStderrClosed(self):
+        self._setupRepo()
+        with self.assertRaises(SystemExit):
+            git_results.run(shlex.split('results/test -m a'))
+        key = open('results/test/1-run/git-results-retry-key').read()
+
+        _other_git_results(key)
+
+        stderr = open('results/test/1-run/stderr').read()
+        print(stderr)
+        self.assertEqual(3, len(stderr.split('Exception: Booo!')))
 
 
     def test_manualResume_corruptBuildState(self):
