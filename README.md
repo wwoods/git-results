@@ -21,9 +21,9 @@ to show the tool's help.
 1. Switch to a temporary branch,
 * Add all local source changes, and create a commit on the temporary branch with all of your code changes,
 * Clone that commit to a temporary folder,
-* Execute the build step within that folder,
+* Execute the build step within that folder\*,
 * Snapshot the folder's contents,
-* Execute the run step within that folder,
+* Execute the run step within that folder\*,
 * Diff the folder's contents against the original snapshot, moving any new files
   to the specified results directory.
 
@@ -32,6 +32,8 @@ A basic invocation of `git-results` looks like this:
     $ git results results/my/experiment
 
 This will open your favorite text editor (via environment variables `VISUAL` or `EDITOR`, or fallback to `vi`) and prompt for a message further describing the experiment.  After that, `git-results` will do its thing, moving any results files to `results/my/experiment/1` where they are archived.  Note the `/1` at the end of the path!  Every experiment ran through `git-results` is versioned, assisting with iterative development of a single experiment.
+
+\* - Note that the environment used to execute scripts is minimal, and only includes `HOME`, `LOGNAME`, and `LANG`.  This is by design, so that experiments may be more easily replicated.  See the "Environment Configuration" section for a workaround.
 
 
 ## Configuration
@@ -118,6 +120,20 @@ progressDelay = 30.
 # /results.
 run = "{cmd} 2"
 ```
+
+
+### Environment Configuration
+
+As previously mentioned, scripts ran through `git-results` run in a minimal environment.  If your application or script relies on some `PATH` value, or perhaps on `DISPLAY=:0`, then it is recommended to accomplish this by adding the following section to `git-results.cfg`:
+
+```ini
+[vars]
+env = "PATH=./bin:$PATH DISPLAY=:0"
+
+[/results/path]
+run = "{env} command"
+```
+
 
 ## What does `git-results` put in the output folder and the folders above it?
 
