@@ -3,7 +3,7 @@ git-results
 
 A helper script / git extension for cataloguing computation results
 
-Version 0.2.4.
+Version 0.2.5.
 
 ## Installation
 
@@ -202,6 +202,10 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2017-8-10 - No arguments will print the help message rather than erroring out.
+  
+  PYTHONUNBUFFERED=1 is automatically passed as part of the git-results 
+  environment.
 * 2017-2-9 - Fixed missing output when the supervisor was spawned via crontab.
 
   When running under crontab, sometimes stderr or stdout gets closed before git-results finishes streaming all of the spawned process' output.  In those cases, a bug in the tee() function stopped further output from being captured.

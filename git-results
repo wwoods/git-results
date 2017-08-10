@@ -46,6 +46,19 @@ SUFFIXES = [ ABORT_SUFFIX, FAIL_SUFFIX, RUN_SUFFIX, MANUAL_SUFFIX, '' ]
 IS_TEST = False
 IS_TEST_FAIL_MANUAL = False
 
+class HelpfulParser(argparse.ArgumentParser):
+    """Prints help before an error.
+
+    https://stackoverflow.com/a/4042861/160205
+    """
+
+    def error(self, message):
+        self.print_help()
+        sys.stderr.write('\n\nError: {}\n'.format(message))
+        self.exit(2)
+
+
+
 class IndexStates(object):
     ABORT = 'abrt'
     FAIL = 'fail'
@@ -256,6 +269,10 @@ def shellOpen(cmd):
     for k in [ 'HOME', 'LOGNAME', 'LANG' ]:
         if k in osEnv:
             env[k] = osEnv[k]
+
+    # For python applications, ensure that output is streamed constantly.
+    env['PYTHONUNBUFFERED'] = '1'
+
     return subprocess.Popen(cmd, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, shell=True, env=env)
 
@@ -1337,7 +1354,7 @@ class LatestTracker(object):
 
 
 def _runLink(args):
-    ap = argparse.ArgumentParser(description = "Link one or more tagged "
+    ap = HelpfulParser(description = "Link one or more tagged "
             "results to a new location (which refers to the original).")
     ap.add_argument("tag_from")
     ap.add_argument("tag_to")
@@ -1363,7 +1380,7 @@ def _runLink(args):
 
 
 def _runMove(args):
-    ap = argparse.ArgumentParser(description = "Move one or more tagged "
+    ap = HelpfulParser(description = "Move one or more tagged "
             "results to a different tag.")
     ap.add_argument("tag_from")
     ap.add_argument("tag_to")
@@ -1475,7 +1492,7 @@ def _runMove(args):
 def _runSupervisor(args):
     """Runs the supervisor functionality.  That is, restarts any processes that
     have not updated their heartbeats in awhile."""
-    ap = argparse.ArgumentParser("Designed to be put in crontab (or some other "
+    ap = HelpfulParser("Designed to be put in crontab (or some other "
             "scheduler).  Retries experiments started with --retry-until-stall "
             "or -r if they are no longer running.")
     ap.add_argument("-v", "--verbose", action = 'store_true')
@@ -1640,14 +1657,15 @@ def _run(programArgs):
     if programArgs is None:
         programArgs = sys.argv[1:]
 
-    if programArgs[0] == "move":
-        return _runMove(programArgs[1:])
-    elif programArgs[0] == "link":
-        return _runLink(programArgs[1:])
-    elif programArgs[0] == "supervisor":
-        return _runSupervisor(programArgs[1:])
+    if len(programArgs) > 0:
+        if programArgs[0] == "move":
+            return _runMove(programArgs[1:])
+        elif programArgs[0] == "link":
+            return _runLink(programArgs[1:])
+        elif programArgs[0] == "supervisor":
+            return _runSupervisor(programArgs[1:])
 
-    ap = argparse.ArgumentParser(description = "A git extension for cataloging "
+    ap = HelpfulParser(description = "A git extension for cataloging "
             "computation results.  Subcommands available: move, link, "
             "supervisor (e.g. git results move -h)")
     ap.add_argument("-i", "--in-place", action = 'store_true',
@@ -1678,7 +1696,7 @@ def _run(programArgs):
             "dated" is an invalid option, as that is a unique folder created by
             git-results to help with indexing results by date.
             "latest" is invalid as well, referring to another unique folder."""))
-    ap.add_argument("--version", action="version", version="0.2.4")
+    ap.add_argument("--version", action="version", version="0.2.5")
     args = ap.parse_args(programArgs)
     args.cwd = os.getcwd()
 
