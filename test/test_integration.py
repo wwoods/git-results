@@ -439,6 +439,24 @@ class TestGitResults(GrTest):
         self.assertEqual("ROUND2\n", open("round2/r/test/2/outTwo").read())
 
 
+    def test_multiple_subonly(self):
+        # Jack's use case?
+        self._setupRepo()
+        os.unlink('git-results.cfg')
+
+        os.makedirs("03-test")
+        self._config(r"""
+                [/results]
+                run = "echo TEST"
+                """, cfgPath="03-test/git-results.cfg")
+
+        try:
+            git_results.run(shlex.split(r"03-test/results -m 'Testing'"))
+            self.fail("No error raised for one-layer results folder")
+        except ValueError as e:
+            self.assertIn('Experiments must have at least two folder names',
+                    str(e))
+
 
     def test_noMessage(self):
         # Ensure it does not work without a message, and that only valid
@@ -688,6 +706,8 @@ class TestGitResults(GrTest):
         print("Got error: {}".format(text))
         self.assertTrue(
                 "'a' seems cyclical on {'a', 'b'}: {b}" in text
+                or "'a' seems cyclical on {'b', 'a'}: {b}" in text
+                or "'b' seems cyclical on {'a', 'b'}: {a}" in text
                 or "'b' seems cyclical on {'b', 'a'}: {a}" in text)
 
 

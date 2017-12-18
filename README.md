@@ -3,7 +3,7 @@ git-results
 
 A helper script / git extension for cataloguing computation results
 
-Version 0.2.5.
+Version 0.2.6.
 
 ## Installation
 
@@ -218,6 +218,9 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2017-12-18 - Clarification of exception message when trying to use an
+  experiment folder with only one folder name (e.g. /results-of-experiment).
+  git-results requires an experiment root, which was made more clear.
 * 2017-8-10 - No arguments will print the help message rather than erroring out.
   
   PYTHONUNBUFFERED=1 is automatically passed as part of the git-results 

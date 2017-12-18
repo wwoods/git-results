@@ -1079,8 +1079,10 @@ def _processTagArgs(args, *tagArgs, **kwargs):
                     tagRoot))
 
         if not tagLeaf:
-            raise ValueError(("No experiment name (child of results root '{}') "
-                    "found in: {}").format(tagRoot, tag))
+            raise ValueError("Experiments must have at least two folder names, "
+                    "e.g. /results/experiment1.  The first folder is used as a "
+                    "results root.  Here, only the results root '{}' was "
+                    "specified.".format(tag))
 
         checkTag('/'.join(tagLeaf), allowExperimentInstance = tagIsExp)
         if tagIsExp is not None:
@@ -1696,7 +1698,7 @@ def _run(programArgs):
             "dated" is an invalid option, as that is a unique folder created by
             git-results to help with indexing results by date.
             "latest" is invalid as well, referring to another unique folder."""))
-    ap.add_argument("--version", action="version", version="0.2.5")
+    ap.add_argument("--version", action="version", version="0.2.6")
     args = ap.parse_args(programArgs)
     args.cwd = os.getcwd()
 
