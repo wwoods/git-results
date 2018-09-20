@@ -1698,7 +1698,7 @@ def _run(programArgs):
             "dated" is an invalid option, as that is a unique folder created by
             git-results to help with indexing results by date.
             "latest" is invalid as well, referring to another unique folder."""))
-    ap.add_argument("--version", action="version", version="0.2.6")
+    ap.add_argument("--version", action="version", version="0.2.7")
     args = ap.parse_args(programArgs)
     args.cwd = os.getcwd()
 
@@ -1849,6 +1849,9 @@ def _run(programArgs):
                 if failing:
                     print("Could not remove {}".format(expDir))
                 safeRollback(os.path.dirname(expDir))
+    except KeyboardInterrupt:
+        # This can happen.  Should not delete associated tags/links.
+        pass
     except:
         # Roll back our tag and results folders...  This catches a build fail
         print("Caught error (presumably in build): {}".format(
