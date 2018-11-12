@@ -1922,13 +1922,18 @@ def _run(programArgs):
     os.unlink(datedLinkRun)
     os.symlink(oldLink[:-len(RUN_SUFFIX)] + newSuffix, datedLink + newSuffix)
 
-    oldLink = os.readlink(latestLinkRun)
-    if (os.path.abspath(os.path.join(os.path.dirname(latestLinkRun), oldLink))
-            == os.path.abspath(resultsDirRun)):
-        # We were the latest test, so do the update
-        os.unlink(latestLinkRun)
-        os.symlink(oldLink[:-len(RUN_SUFFIX)] + newSuffix,
-                latestLink + newSuffix)
+    try:
+        oldLink = os.readlink(latestLinkRun)
+    except FileNotFoundError:
+        # No latest link; we clearly were not the latest.
+        pass
+    else:
+        if (os.path.abspath(os.path.join(os.path.dirname(latestLinkRun), oldLink))
+                == os.path.abspath(resultsDirRun)):
+            # We were the latest test, so do the update
+            os.unlink(latestLinkRun)
+            os.symlink(oldLink[:-len(RUN_SUFFIX)] + newSuffix,
+                    latestLink + newSuffix)
 
     # If we get here, then we're done without hope of retry
     if args.retry_until_stall:
