@@ -9,8 +9,10 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import textwrap
+import time
 
 def checkTag(tag):
     """Returns the commit SHA of the given tag, or None if it does not exist."""
@@ -719,6 +721,73 @@ class TestGitResults(GrTest):
         shutil.rmtree("results/test/run/1")
         git_results.run(shlex.split("results/test/run -m 'h'"))
         self.assertEqual(True, os.path.lexists("results/test/run/3"))
+
+
+    def test_ctrl_c(self):
+        # Ensure that a KeyboardInterrupt (Ctrl+C) is appropriately registered
+        # as an abort, AND that extant results are copied.
+        self.initAndChdirTmp()
+        checked(['git', 'init'])
+        with open('hello', 'w') as f:
+            f.write('''#! /usr/bin/env python3
+import time
+with open('a', 'w') as f:
+    f.write('a output')
+print('before')
+try:
+    time.sleep(5)
+except KeyboardInterrupt:
+    print('got ctrl+c')
+else:
+    print('after')
+    with open('b', 'w') as f:
+        f.write('b output')
+''')
+        addExec('hello')
+        self._config("""
+                [/results]
+                run = "./hello"
+                """, True)
+
+        # Transient failure test....
+        for code in range(ord('a'), ord('z')+1):
+            code_dir = 'results/{}'.format(chr(code))
+            # Launch process, wait 200ms, send Ctrl+C, wait and check
+            e = os.environ.copy()
+            e['GIT_RESULTS_TEST'] = 'true'
+            p = subprocess.Popen('git results {} -m h'.format(code_dir),
+                    shell=True, env=e,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    # calls os.setsid(), which results in a new process group
+                    # being created.
+                    start_new_session=True)
+            pgrp = os.getpgid(p.pid)
+            # 0.2 isn't enough - can see init time from "Non-zero exit status
+            # after X.X:", where below time - X.X = init time.
+            nsleep = 0
+            while not os.path.lexists('{}/1-run/git-results-tmp/a'.format(
+                    code_dir)):
+                time.sleep(0.05)
+                nsleep += 1
+                if nsleep >= 200:
+                    self.fail("Seems broken")
+            # Ctrl+C sends SIGINT to whole process group, hence why this is
+            # complicated.
+            os.killpg(pgrp, signal.SIGINT)
+            stdout, _ = p.communicate()
+            status = p.wait()
+
+            print(stdout.decode())
+            print(status)
+            print(os.listdir(code_dir))
+
+            # Should have reported failure
+            self.assertNotEqual(0, status)
+            # Make sure got abrt tag
+            self.assertEqual(['1-abrt', 'INDEX'], sorted(os.listdir(code_dir)))
+            # Make sure got ctrl+c
+            self.assertEqual('before\ngot ctrl+c\n',
+                    open('{}/1-abrt/stdout'.format(code_dir)).read())
 
 
     def test_env(self):

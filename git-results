@@ -43,7 +43,7 @@ RUN_SUFFIX = '-run'
 MANUAL_SUFFIX = '-manual-retry'
 SUFFIXES = [ ABORT_SUFFIX, FAIL_SUFFIX, RUN_SUFFIX, MANUAL_SUFFIX, '' ]
 # Overridden by tests to suppress raw_input
-IS_TEST = False
+IS_TEST = (os.environ.get('GIT_RESULTS_TEST', '').strip() != '')
 IS_TEST_FAIL_MANUAL = False
 
 class HelpfulParser(argparse.ArgumentParser):
@@ -644,19 +644,40 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
         output = open('{0}/stdout'.format(resultsDir), 'a', line_buffered)
         error = open('{0}/stderr'.format(resultsDir), 'a', line_buffered)
         if not args.internal_retry_abort:
+            # Set up exit precautions...
+            def inner_check():
+                """Function responsible for handling KeyboardInterrupt
+                behavior.  Recurses as much as needed.
+                """
+                nonlocal r, didAbort
+                try:
+                    [t.join() for t in iothreads]
+                    r = p.wait()
+                    didAbort = "abort"
+                except KeyboardInterrupt:
+                    inner_check()
+
+            # For whatever reason, KeyboardInterrupt() may manifest multiple
+            # times.  Make sure that doesn't happen.
             try:
-                p = shellOpen(args.run)
-                iothreads = [ tee(p.stdout, output, sys.stdout),
-                        tee(p.stderr, error, sys.stderr) ]
-                [ t.join() for t in iothreads ]
-                r = p.wait()
+                try:
+                    p = shellOpen(args.run)
+                    iothreads = [ tee(p.stdout, output, sys.stdout),
+                            tee(p.stderr, error, sys.stderr) ]
+                    [ t.join() for t in iothreads ]
+                    r = p.wait()
+                except KeyboardInterrupt:
+                    # Child got Ctrl+C,
+                    print("== CTRL+C caught by git-results; child should exit as per "
+                            "CTRL+C semantics")
+                    inner_check()
+                except:
+                    traceback.print_exc()
+                    inner_check()
             except KeyboardInterrupt:
-                # Child got Ctrl+C,
                 print("== CTRL+C caught by git-results; child should exit as per "
-                        "CTRL+C semantics")
-                [ t.join() for t in iothreads ]
-                r = p.wait()
-                didAbort = "abort"
+                        "CTRL+C semantics (2)")
+                inner_check()
         else:
             r = 1
             didAbort = "abort"
@@ -1698,7 +1719,7 @@ def _run(programArgs):
             "dated" is an invalid option, as that is a unique folder created by
             git-results to help with indexing results by date.
             "latest" is invalid as well, referring to another unique folder."""))
-    ap.add_argument("--version", action="version", version="0.2.7")
+    ap.add_argument("--version", action="version", version="0.2.8")
     args = ap.parse_args(programArgs)
     args.cwd = os.getcwd()
 
@@ -1851,7 +1872,8 @@ def _run(programArgs):
                 safeRollback(os.path.dirname(expDir))
     except KeyboardInterrupt:
         # This can happen.  Should not delete associated tags/links.
-        pass
+        print("*** POTENTIALLY FATAL ERROR: KeyboardInterrupt in outer loop? "
+                "{}".format(traceback.format_exc()))
     except:
         # Roll back our tag and results folders...  This catches a build fail
         print("Caught error (presumably in build): {}".format(

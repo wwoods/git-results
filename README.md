@@ -3,7 +3,7 @@ git-results
 
 A helper script / git extension for cataloguing computation results
 
-Version 0.2.7.
+Version 0.2.8.
 
 ## Installation
 
@@ -218,6 +218,9 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2018-11-12 - Fix KeyboardInterrupts, which apparently may be raised multiple
+  times.  Previously would mark experiments as successful and potentially not
+  copy result data.
 * 2018-09-20 - catch KeyboardInterrupts to avoid deleting experiments that
   should be marked as aborted.
 * 2017-12-18 - Clarification of exception message when trying to use an
