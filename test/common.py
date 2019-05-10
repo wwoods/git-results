@@ -31,6 +31,8 @@ class GrTest(unittest.TestCase):
         sys.stderr = sys.stdout
 
         base = os.path.expanduser('~/.gitresults')
+        if not os.path.exists(base):
+            os.mkdir(base)
         for fname in os.listdir(base):
             if fname.startswith("rtest"):
                 shutil.rmtree(os.path.join(base, fname))
@@ -53,11 +55,13 @@ class GrTest(unittest.TestCase):
 
     def setUp(self):
         self.__oldDir = os.getcwd()
+        self.__oldEditor = os.environ.get('EDITOR', '')
         os.chdir(self.rootDir)
 
 
     def tearDown(self):
         os.chdir(self.__oldDir)
+        os.environ['EDITOR'] = self.__oldEditor
 
 
     def initAndChdirTmp(self):

@@ -395,7 +395,8 @@ def indexWrite(repoBase, commitTag, state, message):
     # Generate our record.
     header = "{} ({}) - ".format(exp, state)
     wrapper = textwrap.TextWrapper(width = 79, initial_indent = '',
-            subsequent_indent = '  ')
+            subsequent_indent = '  ', replace_whitespace=True,
+            max_lines=3)
     record = wrapper.fill(header + message.strip()) + "\n"
 
     with open(indexFile, 'a+') as f:
@@ -870,23 +871,20 @@ def setupExperiment(args, repoBase, resultsRoot, resultsLeaf, message):
     tag = "{0}/{1}/{2}".format(resultsRoot, resultsLeaf, n)
     tagDir = os.path.join(experimentDir, "{0}".format(n))
 
-    if message:
-        cleanMessage = message
-    else:
+    ## It's too easy to include files that shouldn't be included, like images
+    # or temporary files, without seeing git status.  Therefore, check if we
+    # have local changes.  If we do, inquire about that commit first.
+
+    cleanMessage = '' if not message else message
+    if not cleanMessage:
         try:
             _tag, _state, oldMessage = indexRead(repoBase, tag)
         except NotInIndexError:
-            oldMessage = ""
-        message = _getStringViaEditor("git-results needs a commit message",
-                default = oldMessage)
-        if len(message) < 5 or message.startswith("Please replace"):
-            raise ValueError("Commit message must be at least 5 "
-                    "characters; got: '" + message + "'")
-        cleanMessage = message
-
-    # Check the state of our git repo
+            pass
+        else:
+            cleanMessage = oldMessage.strip()
     if checked([ "git", "status", "--porcelain" ]).strip():
-        # Need to commit - make a branch for us
+        # Need to make a commit.  Open up our message in git-results
         branch = "git-results"
         # Include the path to git-results.cfg as an annotation for the branch
         pathToCur = os.path.relpath(os.path.dirname(resultsDir), repoBase)
@@ -897,7 +895,42 @@ def setupExperiment(args, repoBase, resultsRoot, resultsLeaf, message):
         # of which are fine
         checked([ "git", "checkout", "-B", branch ])
         checked([ "git", "add", "-A", repoBase ])
-        checked([ "git", "commit", "-m", cleanMessage ])
+        # Note that we run this outside of checked(), since we must share all
+        # input/output
+        cmd = [ "git", "commit", "-m", cleanMessage ]
+        if not IS_TEST:
+            # -e means edit the message in the git editor.
+            cmd.append("-e")
+            p = subprocess.Popen(cmd, **kwargs)
+            r = p.wait()
+        else:
+            # Bypass user-input sections for testing.
+            for s in ['echo', 'cat']:
+                if os.environ.get('EDITOR', '').startswith(s):
+                    cmd.append("-e")
+                    break
+            print(os.environ.get('EDITOR'))
+            checked(cmd)
+            print("DONE")
+            r = 0
+        if r != 0:
+            raise Exception("Command '{0}' failed with {1}".format(cmd, r))
+
+        # Read back commit message, use for git-results
+        curCommit = checked([ "git", "rev-parse", "HEAD" ]).strip()
+        cleanMessage = checked([ "git", "log", "--format=%B", "-n", "1",
+                curCommit ]).strip()
+    else:
+        # No commit necessary.  Do we need a message anyway?
+        # NOTE: deliberately use "message" here, not "cleanMessage".
+        # cleanMessage was previously overwritten with the prior index state,
+        # so it would not be empty, but we'd still want to prompt for changes.
+        if not message:
+            cleanMessage = _getStringViaEditor("git-results needs an "
+                    "experiment message", default=cleanMessage)
+            if len(cleanMessage) < 5 or cleanMessage.startswith("Please replace"):
+                raise ValueError("Message must be at least 5 characters; "
+                        "got: '" + cleanMessage + "'")
 
     curCommit = checked([ "git", "rev-parse", "HEAD" ]).strip()
 
@@ -909,7 +942,7 @@ def setupExperiment(args, repoBase, resultsRoot, resultsLeaf, message):
     latestLinkAs = None
     try:
         # Ensure INDEX file
-        indexWrite(repoBase, tag, IndexStates.RUN, message)
+        indexWrite(repoBase, tag, IndexStates.RUN, cleanMessage)
 
         # Dated linkage
         now = datetime.datetime.now()
@@ -937,8 +970,8 @@ def setupExperiment(args, repoBase, resultsRoot, resultsLeaf, message):
         # Write our message file
         with open(os.path.join(tagDirRun, "git-results-message"), "w") as f:
             f.write("{0}\n{1}\n".format(tag, "=" * min(79, len(tag))))
-            if message:
-                f.write("{0}\n".format(message))
+            if cleanMessage:
+                f.write("{0}\n".format(cleanMessage))
             f.write("\nCommit: {0}".format(curCommit))
             f.write("\n\ngit-results\n-----------\n")
             f.write("run: {}\nbuild: {}\n".format(args.run, args.build))
@@ -1010,17 +1043,22 @@ def _getStringViaEditor(prompt = "", default = ""):
     try:
         f = os.fdopen(fd, "wt")
         f.write(default)
+        prompt = prompt.split('\n')
+        prompt = ['# ' + p for p in prompt]
+        f.write("\n\n" + '\n'.join(prompt))
         f.close()
 
-        if prompt and not IS_TEST:
-            raw_input(prompt + ".  Press enter to continue.")
-
         r = os.system('{} "{}"'.format(editor, name))
-        if r != 0 and r != 1:
+        if r != 0:
             raise Exception('Editor failed: {} "{}"'.format(editor, name))
 
+        lines = []
         with open(name) as f:
-            return f.read().strip()
+            for line in f:
+                if line.strip().startswith('#'):
+                    continue
+                lines.append(line.rstrip())
+        return '\n'.join(lines).strip()
     finally:
         os.unlink(name)
 
@@ -1477,7 +1515,7 @@ def _runMove(args):
                 if m is None:
                     raise ValueError("Could not get commit from filesystem "
                             "for {}".format(tagSrc))
-                msg = checked([ "git", "log", "--format='%B'", "-n", "1", m.group(1) ]).strip()
+                msg = checked([ "git", "log", "--format=%B", "-n", "1", m.group(1) ]).strip()
                 checked([ "git", "tag", "-m", msg, tagDest, m.group(1) ])
         latestTracker.addTagDir(tagSrc + suffix, tagDest + suffix, suffix)
 

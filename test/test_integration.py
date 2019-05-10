@@ -465,20 +465,27 @@ class TestGitResults(GrTest):
         # messages are accepted.
         self._setupRepo()
 
+        # Commit config file; these are tests of EDITOR, not git commit,
+        # which would be invoked if there are changes.
+        with open('.gitignore', 'w') as f:
+            f.write('/results\n')
+        checked(['git', 'add', '.'])
+        checked(['git', 'commit', '-m', 'config file'])
+
         try:
             try:
                 # Replace editor with bunk editor
                 os.environ['EDITOR'] = 'ls > /dev/null'
                 git_results.run(shlex.split("results/test/run"))
             except ValueError as e:
-                self.assertEqual("Commit message must be at least 5 "
+                self.assertEqual("Message must be at least 5 "
                         "characters; got: ''", str(e))
 
             try:
                 os.environ['EDITOR'] = 'echo "Comm" >'
                 git_results.run(shlex.split("results/test/run"))
             except ValueError as e:
-                self.assertEqual("Commit message must be at least 5 "
+                self.assertEqual("Message must be at least 5 "
                         "characters; got: 'Comm'", str(e))
 
             os.environ['EDITOR'] = 'echo "Commt" >'
@@ -914,13 +921,16 @@ else:
         self.assertEqual("1 (  ok) - h\n2 (gone) - h1\n",
                 open('results/test/run/INDEX').read())
 
-        os.environ['EDITOR'] = 'echo ", now h2" >>'
+        os.environ['EDITOR'] = 'echo -n ", now h2" >>'
         self._config("""
                 [/]
                 build = "cp hello_world hello_world_2"
                 """)
         git_results.run(shlex.split("results/test/run"))
-        self.assertEqual("1 (  ok) - h\n2 (  ok) - h1, now h2\n",
+        # Note, "h1  ," has two spaces as the new EDITOR variable gets run
+        # with the prompt inline.  This is better behavior, but for automated
+        # tests which use e.g. echo, result in the extra spaces.
+        self.assertEqual("1 (  ok) - h\n2 (  ok) - h1  , now h2\n",
                 open('results/test/run/INDEX').read())
 
 
