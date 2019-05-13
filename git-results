@@ -901,7 +901,7 @@ def setupExperiment(args, repoBase, resultsRoot, resultsLeaf, message):
         if not IS_TEST:
             # -e means edit the message in the git editor.
             cmd.append("-e")
-            p = subprocess.Popen(cmd, **kwargs)
+            p = subprocess.Popen(cmd)
             r = p.wait()
         else:
             # Bypass user-input sections for testing.
