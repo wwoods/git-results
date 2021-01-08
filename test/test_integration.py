@@ -460,6 +460,41 @@ class TestGitResults(GrTest):
                     str(e))
 
 
+    def test_multiple_tmp(self):
+        # Ensure a sub-folder's git-results.cfg results in a git-results-tmp
+        # pointing at the same path.
+        self._setupRepo()
+        os.unlink('git-results.cfg')
+        os.makedirs('03-test')
+        self._config(r"""
+                [/results]
+                run = "echo TEST > output-file && sleep 500"
+                """, cfgPath="03-test/git-results.cfg")
+
+        e = os.environ.copy()
+        e['GIT_RESULTS_TEST'] = 'true'
+        p = subprocess.Popen('git results 03-test/results/test -m h',
+                shell=True, env=e,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                start_new_session=True)
+        pgrp = os.getpgid(p.pid)
+        nsleep = time.monotonic()
+        while not os.path.lexists('03-test/results/test/1-run/git-results-tmp/output-file'):
+            time.sleep(.05)
+            if time.monotonic() - nsleep > 1:
+                os.killpg(pgrp, signal.SIGINT)
+                print(p.communicate())
+                self.fail("Seems broken")
+
+        os.killpg(pgrp, signal.SIGINT)
+        stdout, _ = p.communicate()
+        status = p.wait()
+
+        print(stdout.decode())
+        print(status)
+        print(os.listdir('03-test/results/test/1-abrt'))
+
+
     def test_noMessage(self):
         # Ensure it does not work without a message, and that only valid
         # messages are accepted.

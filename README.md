@@ -3,7 +3,7 @@ git-results
 
 A helper script / git extension for cataloguing computation results
 
-Version 0.3.0.
+Version 0.3.1.
 
 ## Installation
 
@@ -218,6 +218,8 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2020-01-08 - 0.3.1. Re-pointed `git-results-tmp` to the same directory within
+  a repository as `git-results.cfg`.
 * 2020-01-07 - 0.3.0. Fixed crash with no output files and trim. Fixed a
   Python 3.8 change in the AST representation.
 * 2019-05-10 - Use git commit to collect experiment message, since that shows a

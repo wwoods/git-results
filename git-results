@@ -1863,7 +1863,9 @@ def _run(programArgs):
         # Link expDir into git-results-tmp
         tmpDirLink = os.path.join(resultsDirRun, 'git-results-tmp')
         try:
-            os.symlink(os.path.abspath(expDir or '.'), tmpDirLink)
+            os.symlink(
+                    os.path.join(os.path.abspath(expDir or '.'), os.path.dirname(args.tag_root)),
+                    tmpDirLink)
         except OSError as e:
             # Already exists
             if e.errno != 17:
