@@ -110,8 +110,10 @@ class FolderState(object):
                     while not c.startswith(prefix):
                         prefix = os.path.dirname(prefix)
 
-            # If only one file remains, the common path is its folder
-            if not os.path.isdir(prefix):
+            if prefix is None:
+                prefix = self._dir
+            elif not os.path.isdir(prefix):
+                # Only one file remains, the common path is its folder
                 prefix = os.path.dirname(prefix)
 
         allErrors = []
