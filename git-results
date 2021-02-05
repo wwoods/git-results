@@ -242,8 +242,9 @@ def checked(cmd, nonZeroOk = False, shell = False):
 
 
 def ensureGitignore(repoBase, resultsRoot):
-    if not checked([ "git", "status", "{0}/{1}/.gitignore".format(repoBase,
-            resultsRoot), "--porcelain", "--ignored" ]).startswith("!!"):
+    output = checked([ "git", "status", "{0}/{1}/.gitignore".format(repoBase,
+            resultsRoot), "--porcelain", "--ignored" ]).strip()
+    if output and not output.startswith("!!"):
         with open(os.path.join(repoBase, '.gitignore'), 'a') as f:
             f.write("\n/{0}".format(resultsRoot))
 
