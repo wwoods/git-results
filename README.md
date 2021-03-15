@@ -3,7 +3,7 @@ git-results
 
 A helper script / git extension for cataloguing computation results
 
-Version 0.3.1.
+Version 0.3.3.
 
 ## Installation
 
@@ -218,6 +218,7 @@ It just uses symlinks, meaning the data will not be copied, but subsequent moves
 Changelog
 ---------
 
+* 2021-03-15 - 0.3.3. Partial folder name matches disallowed (`[/ab]` won't allow `/abc`). Fixed ctrl+c with exit code zero. Fixed DeprecationWarning about `collections.Iterable`.
 * 2021-02-05 - 0.3.2. Fixed multiple adds to `.gitignore` on some git versions.
 * 2021-01-08 - 0.3.1. Re-pointed `git-results-tmp` to the same directory within
   a repository as `git-results.cfg`.
