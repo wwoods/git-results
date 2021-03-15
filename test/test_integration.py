@@ -623,6 +623,28 @@ class TestGitResults(GrTest):
                 open('results/test/run/INDEX').read())
 
 
+    def test_no_prefix_match(self):
+        # Regression; before, prefixes would happily run. We want exact matches
+        # only. No partial matches, like /ab matching /abc
+        self._setupRepo()
+        self._config("""
+                [/results/beep]
+                run = "echo ok"
+                """, new=True)
+
+        with self.assertRaises(SystemExit):
+            git_results.run(shlex.split("results/beep-boop -m 'h'"))
+        self.assertEqual(False, os.path.lexists("results/beep-boop"))
+
+        git_results.run(shlex.split("results/beep/boop -m 'h'"))
+        self.assertEqual(True, os.path.lexists("results/beep/boop/1"))
+        self.assertEqual("ok\n", open("results/beep/boop/1/stdout").read())
+
+        with self.assertRaises(SystemExit):
+            git_results.run(shlex.split("results/boop -m 'h'"))
+        self.assertEqual(False, os.path.lexists("results/boop/1"))
+
+
     def test_extraFile(self):
         self._setupRepo()
         self._config("""

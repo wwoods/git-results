@@ -1190,7 +1190,20 @@ def _parseConfig(args, tagRoot, tagLeaf):
     for sec in cfg:
         if sec.startswith("/"):
             if tagMatch.startswith(sec[1:]):
+                tm_suffix = tagMatch[len(sec[1:]):]
+                if not (not tm_suffix.strip()
+                        or tm_suffix.startswith('/')
+                        or tm_suffix.startswith('\\')
+                        # Also allow root entries
+                        or len(sec) == 1):
+                    # Partial match
+                    raise SystemExit("Partial folder name matches disallowed "
+                            "for safety: "
+                            "{0} / {1}".format(tagMatch, sec))
                 applicable.append(sec)
+    if not applicable:
+        raise SystemExit("At least one section in git-results.cfg must match "
+                "the provided path: {0}".format(tagMatch))
     applicable.sort(key=lambda m: len(m))
 
     fmtKwargs = cfg.get('vars', {})
