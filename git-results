@@ -5,7 +5,7 @@
 from __future__ import print_function
 
 import argparse
-import collections
+import collections.abc
 import datetime
 import fnmatch
 import inspect
@@ -1189,17 +1189,14 @@ def _parseConfig(args, tagRoot, tagLeaf):
     applicable = []
     for sec in cfg:
         if sec.startswith("/"):
-            if tagMatch.startswith(sec[1:]):
-                tm_suffix = tagMatch[len(sec[1:]):]
-                if not (not tm_suffix.strip()
-                        or tm_suffix.startswith('/')
-                        or tm_suffix.startswith('\\')
-                        # Also allow root entries
-                        or len(sec) == 1):
-                    # Partial match
-                    raise SystemExit("Partial folder name matches disallowed "
-                            "for safety: "
-                            "{0} / {1}".format(tagMatch, sec))
+            if (
+                    # Root matches all
+                    len(sec) == 1
+                    # Otherwise want a prefix match at folder boundaries
+                    or tagMatch == sec[1:]
+                    or tagMatch.startswith(sec[1:] + '/')
+                    or tagMatch.startswith(sec[1:] + '\\')
+                    ):
                 applicable.append(sec)
     if not applicable:
         raise SystemExit("At least one section in git-results.cfg must match "
@@ -1268,10 +1265,10 @@ def _parseConfig(args, tagRoot, tagLeaf):
     # Finally apply those kwargs onto args
     args.build = parms['build']
     args.ignore = parms['ignore']
-    if not isinstance(args.ignore, collections.Iterable):
+    if not isinstance(args.ignore, collections.abc.Iterable):
         raise ValueError("ignore must be iterable: {}".format(args.ignore))
     args.ignoreExt = parms['ignoreExt']
-    if not isinstance(args.ignoreExt, collections.Iterable):
+    if not isinstance(args.ignoreExt, collections.abc.Iterable):
         raise ValueError("ignoreExt must be iterable: {}".format(
                 args.ignoreExt))
     args.progress = parms['progress']

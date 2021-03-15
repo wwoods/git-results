@@ -630,6 +630,8 @@ class TestGitResults(GrTest):
         self._config("""
                 [/results/beep]
                 run = "echo ok"
+                [/results/be]
+                run = "echo no"
                 """, new=True)
 
         with self.assertRaises(SystemExit):
@@ -638,6 +640,7 @@ class TestGitResults(GrTest):
 
         git_results.run(shlex.split("results/beep/boop -m 'h'"))
         self.assertEqual(True, os.path.lexists("results/beep/boop/1"))
+        # Ensure later definition wasn't applied
         self.assertEqual("ok\n", open("results/beep/boop/1/stdout").read())
 
         with self.assertRaises(SystemExit):
