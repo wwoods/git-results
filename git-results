@@ -695,7 +695,7 @@ def runExperiment(args, dir, workingDir, extraFiles, resultsDir, commitTag,
         # So, catch them, redirect them to error, and
         wasMoveFailure = False
         try:
-            if r != 0:
+            if r != 0 or didAbort:
                 error.write(("\n\ngit-results detected abnormal program "
                         "termination: {0}\n").format(r))
                 print("Non-zero exit status after {0}: {1}".format(
@@ -1890,7 +1890,7 @@ def _run(programArgs):
             r, abrt, wasMoveFailure = runExperiment(args, expDir,
                     os.path.dirname(args.tag_root), args.extra_file,
                     resultsDirRun, commitTag, args.trim)
-            if r != 0:
+            if r != 0 or abrt:
                 runFailed = True
                 if abrt:
                     runFailed = abrt
